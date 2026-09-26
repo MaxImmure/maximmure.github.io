@@ -44,6 +44,13 @@ body {
   background: var(--bg);
   color: var(--text);
 }
+footer{
+  margin-top:36px;
+  padding-top:18px;
+  border-top:1px solid var(--border);
+  color:var(--muted);
+  font-size:.92rem;
+}
 button, input, select { font: inherit; }
 button, .file-button {
   min-height: 44px;
@@ -246,7 +253,7 @@ tr.day-status .day-status-label { font-weight: 650; }
 
     <div class="cloud-controls" aria-label="Google Drive Synchronisierung">
       <button id="googleConnect" class="primary" type="button" disabled>Mit Google Drive verbinden</button>
-      <button id="googleDisconnect" type="button" hidden>Verbindung trennen</button>
+      <button id="googleDisconnect" type="button" hidden>Automatik vergessen</button>
       <span id="cloudState" class="cloud-state" aria-live="polite">Google-Anmeldung wird geladen …</span>
     </div>
   </section>
@@ -288,7 +295,7 @@ tr.day-status .day-status-label { font-weight: 650; }
 
   <p class="note">
     Wochen laufen immer von Montag bis Sonntag. Eine Wochen-Summe berücksichtigt auch Tage außerhalb des angezeigten Monats, sofern dafür bereits Daten gespeichert sind. Schichttexte wie <strong>11–19 Uhr</strong> oder <strong>8:45–17 Uhr</strong> werden automatisch in Stunden umgerechnet; die Stundenfelder können anschließend manuell überschrieben werden.<br>
-    Alle Änderungen werden zuerst lokal im Browser und nach der Google-Anmeldung zusätzlich automatisch in <strong>arbeitszeitplan.csv</strong> in Google Drive gespeichert. Beim Verbinden wird dieselbe, von dieser App verwaltete CSV auf Android und Windows gesucht und geladen. Beim Zurückkehren zur Seite wird auf neuere Cloud-Daten geprüft. Feiertags- und Krankenstandsstunden zählen als anrechenbare IST-Stunden; ein dienstfreier Tag zählt mit 0 Stunden.
+    Alle Änderungen werden zuerst lokal im Browser und nach der Google-Anmeldung zusätzlich automatisch in <strong>arbeitszeitplan.csv</strong> in Google Drive gespeichert. Nach der ersten erfolgreichen Verbindung merkt sich dieses Gerät, dass Google Drive verwendet werden soll; beim nächsten Öffnen wird eine stille Wiederverbindung versucht. Das OAuth-Zugriffstoken selbst wird dabei nicht dauerhaft gespeichert. Beim Zurückkehren zur Seite wird auf neuere Cloud-Daten geprüft. Feiertags- und Krankenstandsstunden zählen als anrechenbare IST-Stunden; ein dienstfreier Tag zählt mit 0 Stunden.
   </p>
 </main>
 
@@ -324,6 +331,7 @@ tr.day-status .day-status-label { font-weight: 650; }
   // Diesen EINEN String durch deine OAuth-2.0-Web-Client-ID ersetzen.
   const GOOGLE_CLIENT_ID = '951879544166-7ss86em5aavst4brcbvevile08u6fo0f.apps.googleusercontent.com';
   const GOOGLE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+  const GOOGLE_REMEMBERED_KEY = 'dienstzeitplan.googleDriveConnected.v1';
   const FIXED_CSV_NAME = 'arbeitszeitplan.csv';
   const DRIVE_APP_PROPERTY_KEY = 'dienstzeitplan';
   const DRIVE_APP_PROPERTY_VALUE = 'v1';
@@ -341,6 +349,8 @@ tr.day-status .day-status-label { font-weight: 650; }
   let driveSyncInProgress = false;
   let lastRemoteModifiedTime = '';
   let syncPollTimer = null;
+  let tokenRequestMode = 'interactive';
+  let silentRestoreInProgress = false;
 
   function pad2(n) { return String(n).padStart(2, '0'); }
   function dateKey(y, m, d) { return `${y}-${pad2(m)}-${pad2(d)}`; }
@@ -777,16 +787,38 @@ tr.day-status .day-status-label { font-weight: 650; }
     return !!accessToken && Date.now() < tokenExpiresAt;
   }
 
-  function clearDriveSession(message = 'Nicht mit Google Drive verbunden.') {
+  function wasGoogleDriveConnected() {
+    try {
+      return localStorage.getItem(GOOGLE_REMEMBERED_KEY) === 'true';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function rememberGoogleDriveConnection(remember = true) {
+    try {
+      if (remember) localStorage.setItem(GOOGLE_REMEMBERED_KEY, 'true');
+      else localStorage.removeItem(GOOGLE_REMEMBERED_KEY);
+    } catch (_) {
+      // Der eigentliche OAuth-Token wird absichtlich nie dauerhaft gespeichert.
+    }
+  }
+
+  function clearDriveSession(message = 'Nicht mit Google Drive verbunden.', forgetRemembered = false) {
     accessToken = '';
     tokenExpiresAt = 0;
     driveFileId = '';
     driveReady = false;
     lastRemoteModifiedTime = '';
+    silentRestoreInProgress = false;
     clearTimeout(driveSaveTimer);
     clearInterval(syncPollTimer);
+    if (forgetRemembered) rememberGoogleDriveConnection(false);
     el.googleConnect.hidden = false;
-    el.googleConnect.textContent = 'Mit Google Drive verbinden';
+    el.googleConnect.disabled = false;
+    el.googleConnect.textContent = wasGoogleDriveConnected()
+      ? 'Google Drive aktivieren'
+      : 'Mit Google Drive verbinden';
     el.googleDisconnect.hidden = true;
     setCloudState(message, message.includes('abgelaufen') ? 'warn' : '');
   }
@@ -813,26 +845,66 @@ tr.day-status .day-status-label { font-weight: 650; }
       callback: handleGoogleToken
     });
     el.googleConnect.disabled = false;
-    setCloudState('Bereit für Google Drive.');
+
+    if (wasGoogleDriveConnected()) {
+      el.googleConnect.textContent = 'Google Drive wird aktiviert …';
+      el.googleConnect.disabled = true;
+      setCloudState('Google Drive ist eingerichtet – automatische Wiederverbindung wird versucht …');
+      // prompt:'none' darf keine Anmelde-/Zustimmungsoberfläche anzeigen.
+      // Falls Google das stille Wiederherstellen nicht erlaubt, bleibt ein einzelner Aktivierungs-Klick als Fallback.
+      setTimeout(trySilentGoogleRestore, 0);
+    } else {
+      setCloudState('Bereit für Google Drive.');
+    }
+  }
+
+  function trySilentGoogleRestore() {
+    if (!tokenClient || !wasGoogleDriveConnected() || accessTokenValid() || silentRestoreInProgress) return;
+    silentRestoreInProgress = true;
+    el.googleConnect.disabled = true;
+    tokenRequestMode = 'silent';
+    try {
+      tokenClient.requestAccessToken({prompt: 'none'});
+    } catch (_) {
+      silentRestoreInProgress = false;
+      el.googleConnect.hidden = false;
+      el.googleConnect.disabled = false;
+      el.googleConnect.textContent = 'Google Drive aktivieren';
+      setCloudState('Google Drive ist eingerichtet – einmal tippen, um die Synchronisierung zu aktivieren.');
+    }
   }
 
   async function handleGoogleToken(response) {
+    const mode = tokenRequestMode;
+    tokenRequestMode = 'interactive';
+    silentRestoreInProgress = false;
+
     if (!response || response.error) {
       const reason = response?.error_description || response?.error || 'Anmeldung abgebrochen';
-      setCloudState(`Google-Anmeldung fehlgeschlagen: ${reason}`, 'warn');
+      if (mode === 'silent' && wasGoogleDriveConnected()) {
+        el.googleConnect.hidden = false;
+        el.googleConnect.disabled = false;
+        el.googleConnect.textContent = 'Google Drive aktivieren';
+        setCloudState('Google Drive ist eingerichtet – einmal tippen, um die Synchronisierung für diese Sitzung zu aktivieren.');
+      } else {
+        setCloudState(`Google-Anmeldung fehlgeschlagen: ${reason}`, 'warn');
+      }
       return;
     }
+
     accessToken = response.access_token || '';
     const expiresIn = Number(response.expires_in) || 3600;
     tokenExpiresAt = Date.now() + Math.max(60, expiresIn - 60) * 1000;
+    rememberGoogleDriveConnection(true);
     el.googleConnect.disabled = true;
-    setCloudState('Google Drive wird verbunden …');
+    setCloudState(mode === 'silent' ? 'Google Drive wird automatisch wieder verbunden …' : 'Google Drive wird verbunden …');
     try {
       await connectDriveAndLoad();
     } catch (err) {
       driveReady = false;
+      el.googleConnect.hidden = false;
       el.googleConnect.disabled = false;
-      el.googleConnect.textContent = 'Google Drive erneut verbinden';
+      el.googleConnect.textContent = 'Google Drive erneut aktivieren';
       setCloudState(`Google Drive: ${err.message || err}`, 'warn');
     }
   }
@@ -842,24 +914,27 @@ tr.day-status .day-status-label { font-weight: 650; }
       setCloudState('Google-Anmeldung ist noch nicht bereit.', 'warn');
       return;
     }
-    tokenClient.requestAccessToken({prompt: ''});
+    tokenRequestMode = 'interactive';
+    // Beim allerersten Verbinden Zustimmung einholen; auf bekannten Geräten unnötige Dialoge überspringen.
+    tokenClient.requestAccessToken({prompt: wasGoogleDriveConnected() ? '' : 'consent'});
   }
 
   function disconnectGoogleDrive() {
-    // Trennt nur diese Browser-Sitzung; die erteilte Google-Berechtigung bleibt bestehen.
-    clearDriveSession('Google Drive für diese Sitzung getrennt. Lokales Autosave bleibt aktiv.');
+    // Deaktiviert die automatische Wiederverbindung nur auf diesem Gerät.
+    // Die bei Google erteilte Berechtigung wird nicht widerrufen und kann später ohne erneute Zustimmung genutzt werden.
+    clearDriveSession('Automatische Google-Drive-Verbindung auf diesem Gerät deaktiviert. Lokales Autosave bleibt aktiv.', true);
   }
 
   async function driveFetch(url, options = {}) {
     if (!accessTokenValid()) {
-      clearDriveSession('Google-Sitzung abgelaufen – bitte erneut mit Google Drive verbinden.');
+      clearDriveSession('Google-Sitzung abgelaufen – Google Drive wird beim nächsten Zugriff erneut aktiviert.');
       throw new Error('Google-Sitzung abgelaufen');
     }
     const headers = new Headers(options.headers || {});
     headers.set('Authorization', `Bearer ${accessToken}`);
     const response = await fetch(url, {...options, headers, cache: 'no-store'});
     if (response.status === 401) {
-      clearDriveSession('Google-Sitzung abgelaufen – bitte erneut mit Google Drive verbinden.');
+      clearDriveSession('Google-Sitzung abgelaufen – Google Drive wird beim nächsten Zugriff erneut aktiviert.');
       throw new Error('Google-Sitzung abgelaufen');
     }
     if (!response.ok) {
@@ -947,7 +1022,7 @@ tr.day-status .day-status-label { font-weight: 650; }
     el.googleConnect.hidden = true;
     el.googleConnect.disabled = false;
     el.googleDisconnect.hidden = false;
-    setCloudState(`Synchronisiert: ${FIXED_CSV_NAME}`, 'connected');
+    setCloudState(`Google Drive aktiv · synchronisiert: ${FIXED_CSV_NAME}`, 'connected');
     startDrivePolling();
     render();
   }
@@ -1002,6 +1077,16 @@ tr.day-status .day-status-label { font-weight: 650; }
   function startDrivePolling() {
     clearInterval(syncPollTimer);
     syncPollTimer = setInterval(syncFromDriveIfNewer, 30000);
+  }
+
+  function resumeDriveSync() {
+    if (driveReady && accessTokenValid()) {
+      syncFromDriveIfNewer();
+      return;
+    }
+    if (wasGoogleDriveConnected() && tokenClient && !accessTokenValid()) {
+      trySilentGoogleRestore();
+    }
   }
 
   function parseCsv(text) {
@@ -1114,9 +1199,9 @@ tr.day-status .day-status-label { font-weight: 650; }
 
   el.googleConnect.addEventListener('click', connectGoogleDrive);
   el.googleDisconnect.addEventListener('click', disconnectGoogleDrive);
-  window.addEventListener('focus', syncFromDriveIfNewer);
+  window.addEventListener('focus', resumeDriveSync);
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') syncFromDriveIfNewer();
+    if (document.visibilityState === 'visible') resumeDriveSync();
   });
 
   initMonth();
@@ -1129,5 +1214,9 @@ tr.day-status .day-status-label { font-weight: 650; }
   }
 })();
 </script>
+  <footer>
+    Dienstzeitplan · <a href="./nutzungsbedingungen.html">Nutzungsbedingungen</a>
+    <a href="./datenschutz.html">Datenschutzerklärung</a>
+  </footer>
 </body>
 </html>

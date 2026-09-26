@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f5f7fb">
+<title>Datenschutzerklärung – Dienstzeitplan</title>
+<style>
+:root{
+  color-scheme: light dark;
+  --bg:#f5f7fb;
+  --panel:#ffffff;
+  --text:#18202b;
+  --muted:#647084;
+  --border:#d9dee8;
+  --accent:#2459a9;
+  --accent-soft:#eaf1fb;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#11151b;
+    --panel:#1a2029;
+    --text:#edf1f7;
+    --muted:#a8b1c0;
+    --border:#343d4b;
+    --accent:#8ab4f8;
+    --accent-soft:#1d3557;
+  }
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
+body{
+  margin:0;
+  font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+  background:var(--bg);
+  color:var(--text);
+  line-height:1.65;
+}
+main{max-width:900px;margin:0 auto;padding:24px 16px 56px}
+header{
+  background:var(--panel);
+  border:1px solid var(--border);
+  border-radius:16px;
+  padding:22px;
+  margin-bottom:18px;
+}
+h1{font-size:clamp(1.7rem,5vw,2.45rem);line-height:1.15;margin:0 0 8px}
+h2{font-size:1.25rem;line-height:1.3;margin:30px 0 10px}
+h3{font-size:1.05rem;margin:20px 0 8px}
+p,li{font-size:1rem}
+.meta{color:var(--muted);margin:0}
+.card{
+  background:var(--panel);
+  border:1px solid var(--border);
+  border-radius:14px;
+  padding:18px 20px;
+  margin:14px 0;
+}
+.notice{
+  background:var(--accent-soft);
+  border:1px solid color-mix(in srgb,var(--accent) 25%,var(--border));
+  border-radius:12px;
+  padding:14px 16px;
+  margin:18px 0;
+}
+code{
+  background:var(--accent-soft);
+  padding:.12em .35em;
+  border-radius:5px;
+  overflow-wrap:anywhere;
+}
+a{color:var(--accent)}
+nav{
+  display:flex;
+  flex-wrap:wrap;
+  gap:10px;
+  margin-top:16px;
+}
+nav a{
+  display:inline-block;
+  text-decoration:none;
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:8px 11px;
+  background:var(--panel);
+}
+ul{padding-left:1.35rem}
+footer{
+  margin-top:36px;
+  padding-top:18px;
+  border-top:1px solid var(--border);
+  color:var(--muted);
+  font-size:.92rem;
+}
+.placeholder{
+  font-weight:700;
+  color:var(--accent);
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Datenschutzerklärung</h1>
+    <p class="meta">für den Dienst „Dienstzeitplan“ unter https://maximmure.github.io/dienstzeitplan/</p>
+    <p class="meta">Stand: 26. September 2026</p>
+    <nav aria-label="Navigation">
+      <a href="./">Zum Dienstzeitplan</a>
+      <a href="./nutzungsbedingungen.html">Nutzungsbedingungen</a>
+    </nav>
+  </header>
+
+  <section class="card">
+    <h2>1. Verantwortlicher</h2>
+    <p>
+      Verantwortlich für die Verarbeitung personenbezogener Daten im Zusammenhang mit dem Dienstzeitplan,
+      soweit eine solche Verarbeitung durch den Betreiber erfolgt, ist:
+    </p>
+    <p>
+      <span class="placeholder">Maximilian Mörth</span><br>
+      E-Mail: <a class="placeholder" href="mailto:maximilian.moerth@outlook.com">maximilian.moerth@outlook.com</a>
+    </p>
+  </section>
+
+  <section class="card">
+    <h2>2. Zweck und Funktionsweise des Dienstes</h2>
+    <p>
+      Der Dienstzeitplan ist eine browserbasierte Anwendung zur persönlichen Erfassung und Berechnung von
+      Dienstplanzeiten, tatsächlichen Arbeitszeiten, Pausen, Feiertagen, dienstfreien Tagen und Krankenständen.
+      Die Anwendung wird als statische Webseite über GitHub Pages bereitgestellt.
+    </p>
+    <p>
+      Die fachlichen Inhalte des Dienstzeitplans werden nicht an einen eigenen Server des Betreibers übertragen.
+      Sie werden grundsätzlich im Browser des Nutzers gespeichert. Wenn der Nutzer die optionale
+      Google-Drive-Synchronisierung aktiviert, werden die Daten zusätzlich in einer Datei
+      <code>arbeitszeitplan.csv</code> im Google Drive des Nutzers gespeichert und von dort geladen.
+    </p>
+  </section>
+
+  <section class="card">
+    <h2>3. Welche Daten verarbeitet werden</h2>
+
+    <h3>3.1 Im Dienstzeitplan eingegebene Daten</h3>
+    <p>Je nach Nutzung können insbesondere folgende Angaben verarbeitet werden:</p>
+    <ul>
+      <li>Datum und Wochentag,</li>
+      <li>Dienstplan beziehungsweise geplante Arbeitszeit,</li>
+      <li>tatsächliche Arbeitszeit,</li>
+      <li>Pausenangaben,</li>
+      <li>Wochen-Sollstunden,</li>
+      <li>Statusangaben wie „Feiertag“, „Dienstfreier Tag“ oder „Krankenstand“,</li>
+      <li>anrechenbare Stunden für Feiertage oder Krankenstand.</li>
+    </ul>
+    <p>
+      Die Angabe „Krankenstand“ kann eine Information über die Gesundheit darstellen. Nutzer sollten nur Daten
+      über sich selbst oder Daten eingeben, zu deren Verarbeitung sie berechtigt sind.
+    </p>
+
+    <h3>3.2 Lokale Browser-Speicherung</h3>
+    <p>
+      Die Anwendung verwendet den lokalen Browserspeicher (<code>localStorage</code>), um den aktuellen Datenstand
+      auf dem jeweiligen Gerät zu sichern. Der verwendete lokale Speicherbereich trägt technisch den Schlüssel
+      <code>arbeitszeitplan.v1</code>. Diese Daten verbleiben grundsätzlich auf dem jeweiligen Endgerät und können
+      durch Löschen der Website-Daten beziehungsweise des Browser-Speichers entfernt werden.
+      Zusätzlich speichert die Anwendung lokal den technischen Merker <code>dienstzeitplan.googleDriveConnected.v1</code>. Dieser enthält lediglich die Information, dass Google Drive auf diesem Gerät bereits erfolgreich verbunden wurde. Er enthält weder ein Google-Zugriffstoken noch Zugangsdaten oder Inhalte des Google-Kontos.
+    </p>
+    <p>
+      Der Dienst setzt selbst keine Analyse-, Marketing- oder Werbe-Cookies ein.
+    </p>
+  </section>
+
+  <section class="card">
+    <h2>4. Google Identity Services und Google Drive</h2>
+    <p>
+      Für die geräteübergreifende Synchronisierung kann der Nutzer den Dienst freiwillig mit seinem Google-Konto
+      verbinden. Hierfür wird Google Identity Services verwendet und anschließend über die Google Drive API auf
+      die für den Dienst verwendete Datei zugegriffen.
+    </p>
+    <p>
+      Der Dienst fordert ausschließlich den Berechtigungsumfang
+      <code>https://www.googleapis.com/auth/drive.file</code> an. Damit kann die Anwendung Dateien erstellen
+      beziehungsweise auf Dateien zugreifen, die mit dieser Anwendung verwendet werden. Ein allgemeiner Zugriff
+      auf sämtliche Dateien des Google Drive wird nicht angefordert.
+      Bei einem späteren Aufruf kann die Anwendung anhand dieses lokalen Merkers automatisch versuchen, eine bestehende Google-Sitzung ohne erneute Benutzerinteraktion zu verwenden. Ist eine automatische Wiederverbindung nicht möglich, muss der Nutzer die Google-Drive-Verbindung erneut aktivieren.
+    </p>
+    <p>Im Rahmen der Google-Drive-Funktion verarbeitet die Anwendung insbesondere:</p>
+    <ul>
+      <li>ein von Google bereitgestelltes, zeitlich begrenztes OAuth-Zugriffstoken,</li>
+      <li>die technische Google-Drive-Datei-ID,</li>
+      <li>Dateimetadaten wie Name und Änderungszeitpunkt,</li>
+      <li>den Inhalt der Datei <code>arbeitszeitplan.csv</code>.</li>
+    </ul>
+    <p>
+      Das OAuth-Zugriffstoken wird von der aktuellen Anwendung nur im Arbeitsspeicher der geöffneten Browser-Sitzung
+      gehalten und nicht dauerhaft im <code>localStorage</code> gespeichert. Nach Ablauf der Google-Sitzung kann
+      eine erneute Verbindung erforderlich sein.
+    </p>
+    <p>
+      Der Inhalt der CSV-Datei wird ausschließlich dafür verwendet, die vom Nutzer sichtbare
+      Dienstzeitplan-Funktion bereitzustellen und zwischen den Geräten des Nutzers zu synchronisieren.
+      Eine Verwendung für Werbung, Profilbildung, Bonitätsprüfung oder den Verkauf von Daten findet nicht statt.
+      Der Betreiber liest die in Google Drive gespeicherten Dienstzeitdaten nicht zu eigenen Zwecken aus.
+    </p>
+    <p>
+      Die Nutzung und Übertragung von Informationen, die über Google APIs empfangen werden, erfolgt in
+      Übereinstimmung mit der
+      <a href="https://developers.google.com/terms/api-services-user-data-policy" rel="noopener noreferrer">
+        Google API Services User Data Policy
+      </a>, einschließlich der dort beschriebenen Limited-Use-Anforderungen.
+    </p>
+    <p>
+      Weitere Informationen über die Datenverarbeitung durch Google:
+      <a href="https://policies.google.com/privacy?hl=de" rel="noopener noreferrer">
+        Google-Datenschutzerklärung
+      </a>.
+    </p>
+  </section>
+
+  <section class="card">
+    <h2>5. GitHub Pages</h2>
+    <p>
+      Diese Webseite wird über GitHub Pages bereitgestellt. Beim Abruf der Seite werden technisch notwendige
+      Verbindungsdaten an GitHub übermittelt. Nach den Angaben von GitHub wird insbesondere die IP-Adresse von
+      Besuchern einer GitHub-Pages-Seite zu Sicherheitszwecken protokolliert.
+    </p>
+    <p>
+      Der Betreiber verwendet GitHub Pages ausschließlich zur statischen Bereitstellung der HTML-, CSS- und
+      JavaScript-Dateien des Dienstes und betreibt darüber keine eigene serverseitige Nutzerdatenbank.
+    </p>
+    <p>
+      Weitere Informationen:
+      <a href="https://docs.github.com/de/site-policy/privacy-policies/github-general-privacy-statement"
+         rel="noopener noreferrer">GitHub-Datenschutzerklärung</a>.
+    </p>
+  </section>
+
+  <section class="card">
+    <h2>6. Externe Ressourcen und Verbindungsdaten</h2>
+    <p>
+      Die Anwendung lädt die JavaScript-Bibliothek von Google Identity Services von
+      <code>accounts.google.com</code>. Bereits beim technischen Abruf externer Ressourcen können Informationen
+      wie IP-Adresse, Browsertyp, Geräteinformationen, Zeitpunkt des Abrufs und gegebenenfalls bestehende
+      Google-Cookies an Google übertragen werden. Die konkrete Verarbeitung richtet sich nach den Bedingungen
+      und Datenschutzhinweisen von Google.
+    </p>
+  </section>
+
+  <section class="card">
+    <h2>7. Rechtsgrundlagen</h2>
+    <p>
+      Soweit die DSGVO auf die jeweilige Verarbeitung durch den Betreiber Anwendung findet, erfolgt die
+      technisch notwendige Bereitstellung des Dienstes und die Sicherung seiner Funktionsfähigkeit auf Grundlage
+      von Art. 6 Abs. 1 lit. f DSGVO. Das berechtigte Interesse besteht in der sicheren und funktionsfähigen
+      Bereitstellung des Dienstes.
+    </p>
+    <p>
+      Die optionale Verbindung mit Google Drive wird ausschließlich auf ausdrückliche Aktion des Nutzers
+      aktiviert. Soweit hierfür eine Einwilligung erforderlich ist, beruht die Verarbeitung auf Art. 6 Abs. 1
+      lit. a DSGVO; soweit sie zur Bereitstellung der ausdrücklich gewünschten Synchronisationsfunktion
+      erforderlich ist, kann Art. 6 Abs. 1 lit. b DSGVO einschlägig sein.
+    </p>
+    <p>
+      Gesundheitsbezogene Angaben wie „Krankenstand“ werden vom Nutzer selbst eingegeben und im Browser sowie
+      gegebenenfalls im eigenen Google Drive gespeichert. Der Dienst ist nicht dazu bestimmt, dass der Betreiber
+      solche Angaben als eigene Gesundheitsdatenbank sammelt oder auswertet.
+    </p>
+  </section>
+
+  <section class="card">
+    <h2>8. Speicherdauer und Löschung</h2>
+    <ul>
+      <li>
+        <strong>Lokaler Browser-Speicher:</strong> bis der Nutzer die Website-Daten löscht, den Browser-Speicher
+        zurücksetzt oder die gespeicherten Einträge innerhalb der Anwendung entfernt.
+      </li>
+      <li>
+        <strong>Google Drive:</strong> bis der Nutzer die Datei <code>arbeitszeitplan.csv</code> in seinem
+        Google Drive löscht beziehungsweise die Daten dort ändert. Die Google-Berechtigung kann im Google-Konto
+        widerrufen werden.
+      </li>
+      <li>
+        <strong>OAuth-Zugriffstoken:</strong> wird in der aktuellen Anwendung nicht dauerhaft gespeichert und
+        verfällt nach der von Google vorgegebenen Gültigkeitsdauer.
+      </li>
+      <li>
+        <strong>Hosting-/Sicherheitsdaten bei GitHub und Google:</strong> deren Speicherdauer richtet sich nach
+        den jeweiligen Richtlinien der Anbieter.
+      </li>
+    </ul>
+  </section>
+
+  <section class="card">
+    <h2>9. Empfänger und Drittlandübermittlungen</h2>
+    <p>
+      Bei Nutzung des Dienstes können Daten an GitHub als Hosting-Anbieter sowie – bei Verwendung der
+      Google-Funktionen beziehungsweise beim Laden von Google Identity Services – an Google übermittelt werden.
+      Beide Anbieter können Daten im Rahmen ihrer globalen Infrastruktur auch außerhalb des Europäischen
+      Wirtschaftsraums verarbeiten. Einzelheiten zu den jeweils eingesetzten Schutzmechanismen ergeben sich aus
+      den Datenschutzhinweisen der Anbieter.
+    </p>
+    <p>
+      Eine darüber hinausgehende Weitergabe der eingegebenen Dienstzeitdaten durch den Betreiber an Werbenetzwerke,
+      Datenhändler oder sonstige Dritte erfolgt nicht.
+    </p>
+  </section>
+
+  <section class="card">
+    <h2>10. Rechte betroffener Personen</h2>
+    <p>
+      Soweit der Betreiber personenbezogene Daten über eine Person verarbeitet und die gesetzlichen
+      Voraussetzungen vorliegen, bestehen insbesondere Rechte auf Auskunft, Berichtigung, Löschung,
+      Einschränkung der Verarbeitung, Datenübertragbarkeit sowie Widerspruch. Eine erteilte Einwilligung kann
+      grundsätzlich mit Wirkung für die Zukunft widerrufen werden.
+    </p>
+    <p>
+      Da die eigentlichen Dienstzeitplan-Inhalte grundsätzlich lokal im Browser beziehungsweise im Google Drive
+      des Nutzers gespeichert werden und dem Betreiber nicht vorliegen, kann der Nutzer diese Daten regelmäßig
+      unmittelbar selbst löschen oder ändern.
+    </p>
+    <p>
+      Beschwerden können an die zuständige Datenschutzaufsichtsbehörde gerichtet werden. In Österreich ist dies
+      die Österreichische Datenschutzbehörde:
+      <a href="https://www.dsb.gv.at/" rel="noopener noreferrer">www.dsb.gv.at</a>.
+    </p>
+  </section>
+
+  <section class="card">
+    <h2>11. Datensicherheit</h2>
+    <p>
+      Die Webseite wird über HTTPS ausgeliefert. Die Übertragung zu Google-Diensten erfolgt ebenfalls über HTTPS.
+      Dennoch kann bei internetbasierten Diensten keine absolute Sicherheit garantiert werden. Nutzer sind selbst
+      dafür verantwortlich, ihr Google-Konto und ihre Endgeräte durch geeignete Sicherheitsmaßnahmen zu schützen.
+    </p>
+  </section>
+
+  <section class="card">
+    <h2>12. Änderungen dieser Datenschutzerklärung</h2>
+    <p>
+      Diese Datenschutzerklärung kann angepasst werden, wenn sich Funktionen des Dienstes, verwendete
+      Drittanbieter oder rechtliche Anforderungen ändern. Maßgeblich ist die jeweils unter dieser URL
+      veröffentlichte Fassung.
+    </p>
+  </section>
+
+  <footer>
+    Dienstzeitplan · <a href="./">Startseite</a> ·
+    <a href="./nutzungsbedingungen.html">Nutzungsbedingungen</a>
+  </footer>
+</main>
+</body>
+</html>

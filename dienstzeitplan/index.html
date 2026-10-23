@@ -20,7 +20,7 @@
 
     <script>
         // =========================================================================
-        // GOOGLE CLIENT ID (Direkt ohne Secrets eintragen):
+        // GOOGLE CLIENT ID (Hier eintragen):
         // =========================================================================
         const CLIENT_ID = "951879544166-7ss86em5aavst4brcbvevile08u6fo0f.apps.googleusercontent.com"; 
         const SCOPES = "https://www.googleapis.com/auth/drive.file";
@@ -148,7 +148,7 @@
             }
         }
 
-        // Google Drive Ordner & CSV Datei
+        // Google Drive Ordner & CSV
         async function initDriveStorage() {
             showSyncStatus("Verbinde mit Google Drive...", "bg-amber-500");
             try {
@@ -201,7 +201,7 @@
             if (data.files && data.files.length > 0) {
                 return data.files[0].id;
             } else {
-                const initialCsv = "settings_json:" + JSON.stringify(settings) + "\nDatum;Typ;Start;Ende;PauseHas;Standort;Notiz\n";
+                const initialCsv = "settings_json:" + JSON.stringify(settings) + "\nDatum;Typ;SollStart;SollEnde;Start;Ende;PauseHas;Standort;Notiz\n";
                 const metadata = {
                     name: fileName,
                     parents: [fId],
@@ -249,10 +249,12 @@
                 if (line.startsWith("Datum;")) continue;
 
                 const parts = line.split(';');
-                if (parts.length >= 7) {
-                    const [date, type, start, end, pauseHas, location, note] = parts;
+                if (parts.length >= 9) {
+                    const [date, type, targetStart, targetEnd, start, end, pauseHas, location, note] = parts;
                     timeData[date] = {
                         type: type,
+                        targetStart: (targetStart === "undefined" || targetStart === "null") ? "" : targetStart,
+                        targetEnd: (targetEnd === "undefined" || targetEnd === "null") ? "" : targetEnd,
                         start: (start === "undefined" || start === "null") ? "" : start,
                         end: (end === "undefined" || end === "null") ? "" : end,
                         hasPause: pauseHas === "true" || pauseHas === "1" || pauseHas === "Ja",
@@ -267,9 +269,9 @@
             if (!accessToken || !fileId) return;
             try {
                 let csv = "settings_json:" + JSON.stringify(settings) + "\n";
-                csv += "Datum;Typ;Start;Ende;PauseHas;Standort;Notiz\n";
+                csv += "Datum;Typ;SollStart;SollEnde;Start;Ende;PauseHas;Standort;Notiz\n";
                 for (const [date, d] of Object.entries(timeData)) {
-                    csv += `${date};${d.type};${d.start || ''};${d.end || ''};${d.hasPause ? 'Ja' : 'Nein'};${d.location || ''};${d.note || ''}\n`;
+                    csv += `${date};${d.type};${d.targetStart || ''};${d.targetEnd || ''};${d.start || ''};${d.end || ''};${d.hasPause ? 'Ja' : 'Nein'};${d.location || ''};${d.note || ''}\n`;
                 }
 
                 const res = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
@@ -328,9 +330,8 @@
             let monthCreditedMin = 0;
 
             const activeWorkDaysCount = settings.workDays.length;
-            const dailyTargetMin = activeWorkDaysCount > 0 ? Math.round(settings.weeklyTargetMinutes / activeWorkDaysCount) : 480;
+            const defaultDailyTargetMin = activeWorkDaysCount > 0 ? Math.round(settings.weeklyTargetMinutes / activeWorkDaysCount) : 480;
 
-            // Variablen für Wochensaldo
             let weekTargetMin = 0;
             let weekActualMin = 0;
             let weekCreditedMin = 0;
@@ -339,13 +340,14 @@
             for (let day = 1; day <= daysInMonth; day++) {
                 const dateObj = new Date(year, month, day);
                 const isoDate = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                const dayOfWeek = dateObj.getDay(); // 0 = So, 1 = Mo...
+                const dayOfWeek = dateObj.getDay();
                 const isWorkDay = settings.workDays.includes(dayOfWeek);
 
-                // Initialisierung (Start & Endzeit per Default LEER)
                 if (!timeData[isoDate]) {
                     timeData[isoDate] = {
                         type: isWorkDay ? "Arbeit" : "Kein Dienst",
+                        targetStart: "",
+                        targetEnd: "",
                         start: "",
                         end: "",
                         hasPause: true,
@@ -354,13 +356,24 @@
                     };
                 }
                 const d = timeData[isoDate];
-
                 const isArbeit = d.type === "Arbeit";
 
-                const targetMin = (isArbeit && isWorkDay) ? dailyTargetMin : 0;
+                // Berechne SOLL-Minuten für diesen Tag (aus Soll-Zeiten ODER Standard)
+                let targetMin = 0;
+                if (isArbeit && isWorkDay) {
+                    if (d.targetStart && d.targetEnd) {
+                        const [tsH, tsM] = d.targetStart.split(':').map(Number);
+                        const [teH, teM] = d.targetEnd.split(':').map(Number);
+                        targetMin = (teH * 60 + teM) - (tsH * 60 + tsM);
+                        if (targetMin < 0) targetMin = 0;
+                    } else {
+                        targetMin = defaultDailyTargetMin;
+                    }
+                }
                 monthTargetMin += targetMin;
                 weekTargetMin += targetMin;
 
+                // Berechne IST-Minuten
                 let actualMin = 0;
                 if (isArbeit && d.start && d.end) {
                     const [sH, sM] = d.start.split(':').map(Number);
@@ -383,10 +396,9 @@
 
                 const dayBalance = creditedMin - targetMin;
 
-                // Zeile erstellen & Nicht-Arbeitstage ausgrauen
                 const row = document.createElement('tr');
                 if (!isArbeit) {
-                    row.className = `border-b bg-gray-100 text-gray-400 opacity-60`; // Ausgegraut
+                    row.className = `border-b bg-gray-100 text-gray-400 opacity-60`;
                 } else {
                     row.className = `border-b hover:bg-gray-50 ${dayOfWeek === 0 || dayOfWeek === 6 ? 'bg-blue-50/30' : ''}`;
                 }
@@ -406,39 +418,46 @@
                             <option value="Sonstige" ${d.type === 'Sonstige' ? 'selected' : ''}>Sonstige</option>
                         </select>
                     </td>
-                    <td class="p-2"><input type="time" data-date="${isoDate}" data-field="start" value="${d.start || ''}" ${!isArbeit ? 'disabled' : ''} class="day-input input-time border rounded px-1 py-1 text-sm w-24 bg-white disabled:bg-gray-100"></td>
-                    <td class="p-2"><input type="time" data-date="${isoDate}" data-field="end" value="${d.end || ''}" ${!isArbeit ? 'disabled' : ''} class="day-input input-time border rounded px-1 py-1 text-sm w-24 bg-white disabled:bg-gray-100"></td>
-                    <td class="p-2 text-center">
+                    <!-- SOLL Dienstplan -->
+                    <td class="p-2 bg-amber-50/50"><input type="time" data-date="${isoDate}" data-field="targetStart" value="${d.targetStart || ''}" ${!isArbeit ? 'disabled' : ''} class="day-input input-time border rounded px-1 py-1 text-sm w-20 bg-white disabled:bg-gray-100"></td>
+                    <td class="p-2 bg-amber-50/50"><input type="time" data-date="${isoDate}" data-field="targetEnd" value="${d.targetEnd || ''}" ${!isArbeit ? 'disabled' : ''} class="day-input input-time border rounded px-1 py-1 text-sm w-20 bg-white disabled:bg-gray-100"></td>
+                    <td class="p-2 font-mono text-right bg-amber-50/50 text-gray-700 text-xs">${isArbeit ? formatMinutes(targetMin) : '-'}</td>
+                    
+                    <!-- IST tatsächlich -->
+                    <td class="p-2 bg-blue-50/30"><input type="time" data-date="${isoDate}" data-field="start" value="${d.start || ''}" ${!isArbeit ? 'disabled' : ''} class="day-input input-time border rounded px-1 py-1 text-sm w-20 bg-white disabled:bg-gray-100"></td>
+                    <td class="p-2 bg-blue-50/30"><input type="time" data-date="${isoDate}" data-field="end" value="${d.end || ''}" ${!isArbeit ? 'disabled' : ''} class="day-input input-time border rounded px-1 py-1 text-sm w-20 bg-white disabled:bg-gray-100"></td>
+                    <td class="p-2 text-center bg-blue-50/30">
                         <label class="inline-flex items-center cursor-pointer">
                             <input type="checkbox" data-date="${isoDate}" data-field="hasPause" ${d.hasPause ? 'checked' : ''} ${!isArbeit ? 'disabled' : ''} class="day-checkbox rounded text-blue-600 focus:ring-blue-500 w-4 h-4">
                             <span class="ml-1 text-xs">${d.hasPause ? 'Ja' : 'Nein'}</span>
                         </label>
                     </td>
+                    <td class="p-2 font-mono text-right font-semibold bg-blue-50/30">${isArbeit && d.start && d.end ? formatMinutes(actualMin) : '-'}</td>
+
+                    <td class="p-2 font-mono text-right font-bold ${dayBalance >= 0 ? 'text-green-600' : 'text-red-600'}">${formatMinutes(dayBalance)}</td>
+                    
                     <td class="p-2">
                         <select data-date="${isoDate}" data-field="location" ${!isArbeit ? 'disabled' : ''} class="day-input bg-white border rounded px-1 py-1 text-sm disabled:bg-gray-100">
                             ${locOptions}
                         </select>
                     </td>
-                    <td class="p-2 font-mono text-right font-semibold">${isArbeit && d.start && d.end ? formatMinutes(actualMin) : '-'}</td>
-                    <td class="p-2 font-mono text-right font-semibold ${dayBalance >= 0 ? 'text-green-600' : 'text-red-600'}">${formatMinutes(dayBalance)}</td>
                     <td class="p-2"><input type="text" data-date="${isoDate}" data-field="note" value="${d.note || ''}" placeholder="Notiz..." class="day-input border rounded px-2 py-1 text-sm w-full bg-white"></td>
                 `;
                 daysContainer.appendChild(row);
 
-                // Wochensaldo Zeile einfügen (Am Sonntag oder am letzten Tag des Monats)
+                // Wochensaldo / Überstunden (Rechtsbündig nach jeder Woche)
                 if (dayOfWeek === 0 || day === daysInMonth) {
                     const weekBalanceMin = weekCreditedMin - weekTargetMin;
                     const weekRow = document.createElement('tr');
-                    weekRow.className = "bg-blue-100/70 border-b-2 border-blue-300 font-bold text-xs text-blue-900";
+                    weekRow.className = "bg-blue-100/80 border-b-2 border-blue-300 font-bold text-xs text-blue-900";
                     weekRow.innerHTML = `
-                        <td colspan="6" class="p-2 text-right uppercase tracking-wider">Wochensaldo (Woche ${weekNumber}):</td>
+                        <td colspan="8" class="p-2 text-right uppercase tracking-wider">Wochenüberstunden (Woche ${weekNumber}):</td>
                         <td class="p-2 font-mono text-right">${formatMinutes(weekActualMin)}</td>
-                        <td class="p-2 font-mono text-right ${weekBalanceMin >= 0 ? 'text-green-700' : 'text-red-700'}">${formatMinutes(weekBalanceMin)}</td>
-                        <td class="p-2"></td>
+                        <td class="p-2 font-mono text-right text-sm ${weekBalanceMin >= 0 ? 'text-green-700 bg-green-100/50' : 'text-red-700 bg-red-100/50'}">${formatMinutes(weekBalanceMin)}</td>
+                        <td colspan="2" class="p-2"></td>
                     `;
                     daysContainer.appendChild(weekRow);
 
-                    // Reset für nächste Woche
                     weekTargetMin = 0;
                     weekActualMin = 0;
                     weekCreditedMin = 0;
@@ -446,7 +465,7 @@
                 }
             }
 
-            // Monats-KPIs aktualisieren
+            // Monats-KPIs
             const monthBalanceMin = monthCreditedMin - monthTargetMin;
             document.getElementById('kpi-month-target').textContent = formatMinutes(monthTargetMin);
             document.getElementById('kpi-month-actual').textContent = formatMinutes(monthActualMin);
@@ -455,7 +474,6 @@
             balanceEl.textContent = formatMinutes(monthBalanceMin);
             balanceEl.className = `text-xl font-bold font-mono ${monthBalanceMin >= 0 ? 'text-green-600' : 'text-red-600'}`;
 
-            // Event-Listener für Eingaben
             document.querySelectorAll('.day-input').forEach(input => {
                 input.addEventListener('change', (e) => {
                     const date = e.target.dataset.date;
@@ -490,7 +508,6 @@
             return `${sign}${hours}:${String(minutes).padStart(2, '0')}`;
         }
 
-        // Settings Modal Steuerung
         function openSettingsModal() {
             const modal = document.getElementById('settings-modal');
             if (!modal) return;
@@ -540,9 +557,9 @@
             }
 
             document.getElementById('export-btn').addEventListener('click', () => {
-                let csv = 'Datum;Typ;Start;Ende;PauseHas;Standort;Notiz\n';
+                let csv = 'Datum;Typ;SollStart;SollEnde;Start;Ende;PauseHas;Standort;Notiz\n';
                 for (const [date, d] of Object.entries(timeData)) {
-                    csv += `${date};${d.type};${d.start || ''};${d.end || ''};${d.hasPause ? 'Ja' : 'Nein'};${d.location || ''};${d.note || ''}\n`;
+                    csv += `${date};${d.type};${d.targetStart || ''};${d.targetEnd || ''};${d.start || ''};${d.end || ''};${d.hasPause ? 'Ja' : 'Nein'};${d.location || ''};${d.note || ''}\n`;
                 }
                 const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
                 const url = URL.createObjectURL(blob);
@@ -595,12 +612,12 @@
                 </div>
 
                 <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
-                    <div class="bg-gray-50 p-3 rounded border">
-                        <div class="text-xs text-gray-500">Monat Soll</div>
+                    <div class="bg-amber-50/60 p-3 rounded border border-amber-200">
+                        <div class="text-xs text-amber-800 font-medium">Monat Soll (Plan)</div>
                         <div id="kpi-month-target" class="text-lg font-bold font-mono">0:00</div>
                     </div>
-                    <div class="bg-gray-50 p-3 rounded border">
-                        <div class="text-xs text-gray-500">Ist-Zeit</div>
+                    <div class="bg-blue-50/60 p-3 rounded border border-blue-200">
+                        <div class="text-xs text-blue-800 font-medium">Ist-Zeit (Geleistet)</div>
                         <div id="kpi-month-actual" class="text-lg font-bold font-mono">0:00</div>
                     </div>
                     <div class="bg-gray-50 p-3 rounded border">
@@ -631,17 +648,23 @@
 
         <!-- Tageserfassung Tabelle -->
         <div class="bg-white rounded-lg shadow overflow-x-auto">
-            <table class="w-full text-left border-collapse min-w-[800px]">
+            <table class="w-full text-left border-collapse min-w-[950px]">
                 <thead>
                     <tr class="bg-gray-100 border-b text-xs text-gray-600 uppercase">
                         <th class="p-3">Datum</th>
                         <th class="p-3">Tagesart</th>
-                        <th class="p-3">Start</th>
-                        <th class="p-3">Ende</th>
-                        <th class="p-3 text-center">Pause</th>
-                        <th class="p-3">Standort</th>
-                        <th class="p-3 text-right">Ist</th>
+                        <!-- SOLL Spalten -->
+                        <th class="p-3 bg-amber-100/60 text-amber-900" title="Dienstplan Soll-Start">Soll Start</th>
+                        <th class="p-3 bg-amber-100/60 text-amber-900" title="Dienstplan Soll-Ende">Soll Ende</th>
+                        <th class="p-3 bg-amber-100/60 text-amber-900 text-right">Soll Std</th>
+                        <!-- IST Spalten -->
+                        <th class="p-3 bg-blue-100/60 text-blue-900">Ist Start</th>
+                        <th class="p-3 bg-blue-100/60 text-blue-900">Ist Ende</th>
+                        <th class="p-3 bg-blue-100/60 text-blue-900 text-center">Pause</th>
+                        <th class="p-3 bg-blue-100/60 text-blue-900 text-right">Ist Std</th>
+                        <!-- Saldo & Rest -->
                         <th class="p-3 text-right">Saldo</th>
+                        <th class="p-3">Standort</th>
                         <th class="p-3">Notiz</th>
                     </tr>
                 </thead>

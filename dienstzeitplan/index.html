@@ -3,39 +3,54 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Private Arbeitszeiterfassung (Google Drive)</title>
+    <title>Arbeitszeiterfassung (Google Drive)</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- FontAwesome für Icons -->
+    <!-- FontAwesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Google Identity Services -->
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     <!-- PWA Manifest -->
-    <link rel="manifest" href="data:application/manifest+json;charset=utf-8,%7B%22name%22%3A%22Arbeitszeiterfassung%20Drive%22%2C%22short_name%22%3A%22Zeiterfassung%22%2C%22start_url%22%3A%22.%2F%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%23f3f4f6%22%2C%22theme_color%22%3A%22%232563eb%22%2C%22icons%22%3A%5B%5D%7D">
+    <link rel="manifest" href="data:application/manifest+json;charset=utf-8,%7B%22name%22%3A%22Arbeitszeiterfassung%22%2C%22short_name%22%3A%22Zeiterfassung%22%2C%22start_url%22%3A%22.%2F%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%23f3f4f6%22%2C%22theme_color%22%3A%22%232563eb%22%7D">
     <style>
         .input-time { font-family: monospace; }
+        .non-work-row {
+            background-color: #f3f4f6 !important;
+            color: #9ca3af !important;
+        }
+        .non-work-row input, .non-work-row select {
+            background-color: #e5e7eb !important;
+            color: #6b7280 !important;
+        }
+        .week-summary-row {
+            background-color: #eff6ff;
+            border-top: 2px solid #bfdbfe;
+            border-bottom: 2px solid #bfdbfe;
+            font-weight: 600;
+        }
     </style>
 </head>
 <body class="bg-gray-100 min-h-screen text-gray-800 flex flex-col">
 
     <script>
         // =========================================================================
-        // DEINE GOOGLE CLIENT ID HIER DIREKT EINTRAGEN (KEINE SECRETS NÖTIG):
+        // GOOGLE CLIENT ID (HIER DIREKT EINTRAGEN - KEIN SECRET NÖTIG)
         // =========================================================================
         const CLIENT_ID = "951879544166-7ss86em5aavst4brcbvevile08u6fo0f.apps.googleusercontent.com"; 
         
         const SCOPES = "https://www.googleapis.com/auth/drive.file";
 
-        let tokenClient;
+        let tokenClient = null;
         let accessToken = localStorage.getItem('g_access_token');
         let userEmail = localStorage.getItem('g_user_email');
 
         let currentDate = new Date();
         let timeData = {}; // Format: "YYYY-MM-DD" -> Data
         let settings = {
-            weeklyTargetMinutes: 2400, // 40h
-            workDays: [1, 2, 3, 4, 5, 6], // Mo-Sa
+            weeklyTargetMinutes: 2400, // 40 Stunden
+            workDays: [1, 2, 3, 4, 5], // Mo-Fr
             locations: ["Homeoffice", "Büro Hauptsitz", "Filiale", "Kunden vor Ort", "Unterwegs"],
+            defaultPauseMinutes: 30, // Default Pause in Minuten (konfigurierbar)
             absenceDefaults: {
                 "Urlaub": 480,
                 "Krankheit": 480,
@@ -58,12 +73,13 @@
                 checkAuthAndLoad();
             } else {
                 showLoginState(false);
+                renderApp();
             }
         });
 
         function initGoogleIdClient() {
             if (typeof google === 'undefined') {
-                setTimeout(initGoogleIdClient, 500);
+                setTimeout(initGoogleIdClient, 300);
                 return;
             }
             tokenClient = google.accounts.oauth2.initTokenClient({
@@ -89,7 +105,7 @@
                 if (tokenClient) {
                     tokenClient.requestAccessToken({ prompt: 'consent' });
                 } else {
-                    alert("Google Auth wird noch geladen. Bitte kurz warten.");
+                    alert("Google Auth Service wird noch geladen. Bitte kurz warten...");
                 }
             });
 
@@ -148,15 +164,11 @@
             }
         }
 
-        // Google Drive Ordner & CSV Datei Handhabung
         async function initDriveStorage() {
             showSyncStatus("Verbinde mit Google Drive...", "bg-amber-500");
             try {
-                // 1. Ordner "Dienstplan" suchen oder erstellen
                 folderId = await findOrCreateFolder("Dienstplan");
-                // 2. Datei "dienstplan.csv" in diesem Ordner suchen oder erstellen
                 fileId = await findOrCreateFile(folderId, "dienstplan.csv");
-                // 3. Inhalt laden
                 await loadCsvFromDrive();
                 showSyncStatus("Verbunden & Synchronisiert", "bg-green-500");
             } catch (e) {
@@ -165,7 +177,7 @@
                     localStorage.removeItem('g_access_token');
                     showLoginState(false);
                 } else {
-                    showSyncStatus("Fehler bei Google Drive Verbindung", "bg-red-500");
+                    showSyncStatus("Fehler bei Drive-Verbindung", "bg-red-500");
                 }
             }
         }
@@ -204,7 +216,7 @@
             if (data.files && data.files.length > 0) {
                 return data.files[0].id;
             } else {
-                const initialCsv = "settings_json:" + JSON.stringify(settings) + "\nDatum;Typ;Start;Ende;Pause(min);Standort;Notiz\n";
+                const initialCsv = "settings_json:" + JSON.stringify(settings) + "\nDatum;Typ;Start;Ende;PauseHas;Standort;Notiz\n";
                 const metadata = {
                     name: fileName,
                     parents: [fId],
@@ -243,7 +255,8 @@
                 if (line.startsWith("settings_json:")) {
                     try {
                         const jsonStr = line.replace("settings_json:", "");
-                        settings = { ...settings, ...JSON.parse(jsonStr) };
+                        const loadedSettings = JSON.parse(jsonStr);
+                        settings = { ...settings, ...loadedSettings };
                     } catch (e) {
                         console.error("Settings Parse Fehler:", e);
                     }
@@ -253,13 +266,13 @@
 
                 const parts = line.split(';');
                 if (parts.length >= 7) {
-                    const [date, type, start, end, breakMin, location, note] = parts;
+                    const [date, type, start, end, pauseHas, location, note] = parts;
                     timeData[date] = {
-                        type: type,
-                        start: start === "undefined" ? "" : start,
-                        end: end === "undefined" ? "" : end,
-                        breakMin: Number(breakMin) || 0,
-                        location: location,
+                        type: type || "Arbeit",
+                        start: (start === "undefined" || !start) ? "" : start,
+                        end: (end === "undefined" || !end) ? "" : end,
+                        pauseHas: pauseHas === "true" || pauseHas === "1" || pauseHas === "Ja" || pauseHas === "30",
+                        location: location || "",
                         note: note || ""
                     };
                 }
@@ -269,10 +282,11 @@
         async function saveCsvToDrive() {
             if (!accessToken || !fileId) return;
             try {
+                showSyncStatus("Speichere in Drive...", "bg-amber-500");
                 let csv = "settings_json:" + JSON.stringify(settings) + "\n";
-                csv += "Datum;Typ;Start;Ende;Pause(min);Standort;Notiz\n";
+                csv += "Datum;Typ;Start;Ende;PauseHas;Standort;Notiz\n";
                 for (const [date, d] of Object.entries(timeData)) {
-                    csv += `${date};${d.type};${d.start || ''};${d.end || ''};${d.breakMin};${d.location || ''};${d.note || ''}\n`;
+                    csv += `${date};${d.type};${d.start || ''};${d.end || ''};${d.pauseHas ? 'Ja' : 'Nein'};${d.location || ''};${d.note || ''}\n`;
                 }
 
                 const res = await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`, {
@@ -315,7 +329,7 @@
             });
         }
 
-        // Haupt-Render-Logik (alle Tage des Monats)
+        // Haupt-Render-Schleife
         function renderApp() {
             const year = currentDate.getFullYear();
             const month = currentDate.getMonth();
@@ -330,59 +344,78 @@
             let monthActualMin = 0;
             let monthCreditedMin = 0;
 
-            const activeWorkDaysCount = settings.workDays.length;
-            const dailyTargetMin = activeWorkDaysCount > 0 ? Math.round(settings.weeklyTargetMinutes / activeWorkDaysCount) : 480;
+            const activeWorkDaysCount = (settings.workDays && settings.workDays.length > 0) ? settings.workDays.length : 5;
+            const dailyTargetMin = Math.round((settings.weeklyTargetMinutes || 2400) / activeWorkDaysCount);
+
+            let currentWeekNumber = null;
+            let weekTargetMin = 0;
+            let weekActualMin = 0;
+            let weekCreditedMin = 0;
 
             for (let day = 1; day <= daysInMonth; day++) {
                 const dateObj = new Date(year, month, day);
                 const isoDate = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                const dayOfWeek = dateObj.getDay();
-                const isWorkDay = settings.workDays.includes(dayOfWeek);
+                const dayOfWeek = dateObj.getDay(); // 0 = So, 1 = Mo ...
+                const isWorkDayBySetting = settings.workDays.includes(dayOfWeek);
 
+                // Default empty start/end values
                 if (!timeData[isoDate]) {
                     timeData[isoDate] = {
-                        type: isWorkDay ? "Arbeit" : "Kein Dienst",
-                        start: isWorkDay ? "08:00" : "",
-                        end: isWorkDay ? "16:30" : "",
-                        breakMin: 30,
-                        location: settings.locations[0] || "",
+                        type: isWorkDayBySetting ? "Arbeit" : "Kein Dienst",
+                        start: "", // Per Default leer!
+                        end: "",   // Per Default leer!
+                        pauseHas: true, // Default Pause Ja
+                        location: settings.locations[0] || "Homeoffice",
                         note: ""
                     };
                 }
                 const d = timeData[isoDate];
 
-                const targetMin = (d.type === "Arbeit" && isWorkDay) ? dailyTargetMin : 0;
-                monthTargetMin += targetMin;
+                const isWork = d.type === "Arbeit";
+                const targetMin = (isWork && isWorkDayBySetting) ? dailyTargetMin : 0;
+                
+                // Pause-Berechnung basierend auf Ja/Nein Toggle und Settings
+                const pauseMin = d.pauseHas ? (Number(settings.defaultPauseMinutes) || 0) : 0;
 
                 let actualMin = 0;
-                if (d.start && d.end && d.type === "Arbeit") {
+                if (isWork && d.start && d.end) {
                     const [sH, sM] = d.start.split(':').map(Number);
                     const [eH, eM] = d.end.split(':').map(Number);
-                    actualMin = (eH * 60 + eM) - (sH * 60 + sM) - (Number(d.breakMin) || 0);
-                    if (actualMin < 0) actualMin = 0;
+                    if (!isNaN(sH) && !isNaN(eH)) {
+                        actualMin = (eH * 60 + eM) - (sH * 60 + sM) - pauseMin;
+                        if (actualMin < 0) actualMin = 0;
+                    }
                 }
-                monthActualMin += actualMin;
 
                 let creditedMin = 0;
-                if (d.type === "Arbeit") {
+                if (isWork) {
                     creditedMin = actualMin;
                 } else {
                     creditedMin = settings.absenceDefaults[d.type] !== undefined ? settings.absenceDefaults[d.type] : 0;
                 }
-                monthCreditedMin += creditedMin;
 
                 const dayBalance = creditedMin - targetMin;
 
+                monthTargetMin += targetMin;
+                monthActualMin += actualMin;
+                monthCreditedMin += creditedMin;
+
+                weekTargetMin += targetMin;
+                weekActualMin += actualMin;
+                weekCreditedMin += creditedMin;
+
+                // Tabellenzeile Rendern
                 const row = document.createElement('tr');
-                row.className = `border-b hover:bg-gray-50 ${dayOfWeek === 0 || dayOfWeek === 6 ? 'bg-gray-50 text-gray-500' : ''}`;
-                
+                const isGreyedOut = !isWork; // Ausgrauen, wenn NICHT "Arbeit"
+                row.className = `border-b transition-colors ${isGreyedOut ? 'non-work-row' : 'hover:bg-blue-50/30'}`;
+
                 const formattedDate = dateObj.toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' });
-                let locOptions = settings.locations.map(loc => `<option value="${loc}" ${d.location === loc ? 'selected' : ''}>${loc}</option>`).join('');
+                let locOptions = (settings.locations || []).map(loc => `<option value="${loc}" ${d.location === loc ? 'selected' : ''}>${loc}</option>`).join('');
 
                 row.innerHTML = `
                     <td class="p-2 font-medium">${formattedDate}</td>
                     <td class="p-2">
-                        <select data-date="${isoDate}" data-field="type" class="day-input bg-white border rounded px-1 py-1 text-sm">
+                        <select data-date="${isoDate}" data-field="type" class="day-input bg-white border border-gray-300 rounded px-2 py-1 text-sm font-medium focus:ring-2 focus:ring-blue-500">
                             <option value="Arbeit" ${d.type === 'Arbeit' ? 'selected' : ''}>Arbeit</option>
                             <option value="Urlaub" ${d.type === 'Urlaub' ? 'selected' : ''}>Urlaub</option>
                             <option value="Krankheit" ${d.type === 'Krankheit' ? 'selected' : ''}>Krankheit</option>
@@ -391,29 +424,58 @@
                             <option value="Sonstige" ${d.type === 'Sonstige' ? 'selected' : ''}>Sonstige</option>
                         </select>
                     </td>
-                    <td class="p-2"><input type="time" data-date="${isoDate}" data-field="start" value="${d.start || ''}" class="day-input input-time border rounded px-1 py-1 text-sm w-24"></td>
-                    <td class="p-2"><input type="time" data-date="${isoDate}" data-field="end" value="${d.end || ''}" class="day-input input-time border rounded px-1 py-1 text-sm w-24"></td>
-                    <td class="p-2"><input type="number" data-date="${isoDate}" data-field="breakMin" value="${d.breakMin}" class="day-input border rounded px-1 py-1 text-sm w-16"></td>
+                    <td class="p-2"><input type="time" data-date="${isoDate}" data-field="start" value="${d.start || ''}" ${!isWork ? 'disabled' : ''} class="day-input input-time border border-gray-300 rounded px-2 py-1 text-sm w-24"></td>
+                    <td class="p-2"><input type="time" data-date="${isoDate}" data-field="end" value="${d.end || ''}" ${!isWork ? 'disabled' : ''} class="day-input input-time border border-gray-300 rounded px-2 py-1 text-sm w-24"></td>
+                    <td class="p-2 text-center">
+                        <label class="inline-flex items-center cursor-pointer">
+                            <input type="checkbox" data-date="${isoDate}" data-field="pauseHas" ${d.pauseHas ? 'checked' : ''} ${!isWork ? 'disabled' : ''} class="day-checkbox sr-only peer">
+                            <div class="w-9 h-5 bg-gray-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600 relative"></div>
+                            <span class="ml-2 text-xs font-semibold text-gray-700">${d.pauseHas ? 'Ja' : 'Nein'}</span>
+                        </label>
+                    </td>
                     <td class="p-2">
-                        <select data-date="${isoDate}" data-field="location" class="day-input bg-white border rounded px-1 py-1 text-sm">
+                        <select data-date="${isoDate}" data-field="location" ${!isWork ? 'disabled' : ''} class="day-input bg-white border border-gray-300 rounded px-2 py-1 text-sm">
                             ${locOptions}
                         </select>
                     </td>
-                    <td class="p-2 font-mono text-right">${formatMinutes(actualMin)}</td>
-                    <td class="p-2 font-mono text-right ${dayBalance >= 0 ? 'text-green-600' : 'text-red-600'}">${formatMinutes(dayBalance)}</td>
-                    <td class="p-2"><input type="text" data-date="${isoDate}" data-field="note" value="${d.note || ''}" placeholder="Notiz..." class="day-input border rounded px-2 py-1 text-sm w-full"></td>
+                    <td class="p-2 font-mono text-right font-medium">${formatMinutes(actualMin)}</td>
+                    <td class="p-2 font-mono text-right font-semibold ${dayBalance >= 0 ? 'text-emerald-600' : 'text-red-600'}">${formatMinutes(dayBalance)}</td>
+                    <td class="p-2"><input type="text" data-date="${isoDate}" data-field="note" value="${d.note || ''}" placeholder="Notiz..." class="day-input border border-gray-300 rounded px-2 py-1 text-sm w-full"></td>
                 `;
                 daysContainer.appendChild(row);
+
+                // Wochensaldo Einfügen am Sonntag ODER am letzten Tag des Monats
+                if (dayOfWeek === 0 || day === daysInMonth) {
+                    const weekBalanceMin = weekCreditedMin - weekTargetMin;
+                    const weekRow = document.createElement('tr');
+                    weekRow.className = "week-summary-row";
+                    weekRow.innerHTML = `
+                        <td colspan="6" class="p-2 text-right text-xs uppercase tracking-wider text-blue-900">
+                            <i class="fa-solid fa-calendar-week mr-1"></i> Wochensaldo (Ist: ${formatMinutes(weekActualMin)} | Soll: ${formatMinutes(weekTargetMin)})
+                        </td>
+                        <td class="p-2 font-mono text-right text-blue-900">${formatMinutes(weekActualMin)}</td>
+                        <td class="p-2 font-mono text-right font-bold ${weekBalanceMin >= 0 ? 'text-emerald-700' : 'text-red-700'}">${formatMinutes(weekBalanceMin)}</td>
+                        <td></td>
+                    `;
+                    daysContainer.appendChild(weekRow);
+
+                    // Reset Wochenzähler
+                    weekTargetMin = 0;
+                    weekActualMin = 0;
+                    weekCreditedMin = 0;
+                }
             }
 
+            // Gesamtsummen aktualisieren
             const monthBalanceMin = monthCreditedMin - monthTargetMin;
             document.getElementById('kpi-month-target').textContent = formatMinutes(monthTargetMin);
             document.getElementById('kpi-month-actual').textContent = formatMinutes(monthActualMin);
             document.getElementById('kpi-month-credited').textContent = formatMinutes(monthCreditedMin);
             const balanceEl = document.getElementById('kpi-month-balance');
             balanceEl.textContent = formatMinutes(monthBalanceMin);
-            balanceEl.className = `text-xl font-bold font-mono ${monthBalanceMin >= 0 ? 'text-green-600' : 'text-red-600'}`;
+            balanceEl.className = `text-xl font-bold font-mono ${monthBalanceMin >= 0 ? 'text-emerald-600' : 'text-red-600'}`;
 
+            // Event-Listener für Inputs
             document.querySelectorAll('.day-input').forEach(input => {
                 input.addEventListener('change', (e) => {
                     const date = e.target.dataset.date;
@@ -421,6 +483,18 @@
                     let val = e.target.value;
                     if (timeData[date]) {
                         timeData[date][field] = val;
+                        saveCsvToDrive();
+                        renderApp();
+                    }
+                });
+            });
+
+            // Event-Listener für Pause Checkbox Toggle
+            document.querySelectorAll('.day-checkbox').forEach(chk => {
+                chk.addEventListener('change', (e) => {
+                    const date = e.target.dataset.date;
+                    if (timeData[date]) {
+                        timeData[date].pauseHas = e.target.checked;
                         saveCsvToDrive();
                         renderApp();
                     }
@@ -436,44 +510,63 @@
             return `${sign}${hours}:${String(minutes).padStart(2, '0')}`;
         }
 
+        // Modal / Einstellungen
         const settingsModal = document.getElementById('settings-modal');
+
         function openSettingsModal() {
             document.getElementById('setting-weekly-target').value = (settings.weeklyTargetMinutes / 60).toFixed(1);
+            document.getElementById('setting-default-pause').value = settings.defaultPauseMinutes || 30;
+
+            const workDays = settings.workDays || [1, 2, 3, 4, 5];
             [1, 2, 3, 4, 5, 6, 0].forEach(day => {
-                document.getElementById(`day-${day}`).checked = settings.workDays.includes(day);
+                const el = document.getElementById(`day-${day}`);
+                if (el) el.checked = workDays.includes(day);
             });
-            document.getElementById('setting-locations').value = settings.locations.join(', ');
+
+            document.getElementById('setting-locations').value = (settings.locations || []).join(', ');
             settingsModal.classList.remove('hidden');
         }
 
-        document.getElementById('close-settings').addEventListener('click', () => {
-            settingsModal.classList.add('hidden');
-        });
+        function setupSettingsForm() {
+            document.getElementById('close-settings').addEventListener('click', () => {
+                settingsModal.classList.add('hidden');
+            });
 
-        document.getElementById('settings-form').addEventListener('submit', (e) => {
-            e.preventDefault();
-            const weeklyHours = parseFloat(document.getElementById('setting-weekly-target').value) || 40;
-            settings.weeklyTargetMinutes = Math.round(weeklyHours * 60);
-            settings.workDays = [1, 2, 3, 4, 5, 6, 0].filter(day => document.getElementById(`day-${day}`).checked);
-            const locStr = document.getElementById('setting-locations').value;
-            settings.locations = locStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
+            document.getElementById('settings-form').addEventListener('submit', (e) => {
+                e.preventDefault();
 
-            saveCsvToDrive();
-            settingsModal.classList.add('hidden');
-            renderApp();
-        });
+                const weeklyHours = parseFloat(document.getElementById('setting-weekly-target').value) || 40;
+                settings.weeklyTargetMinutes = Math.round(weeklyHours * 60);
+
+                const pauseVal = parseInt(document.getElementById('setting-default-pause').value, 10);
+                settings.defaultPauseMinutes = isNaN(pauseVal) ? 30 : pauseVal;
+
+                settings.workDays = [1, 2, 3, 4, 5, 6, 0].filter(day => {
+                    const el = document.getElementById(`day-${day}`);
+                    return el && el.checked;
+                });
+
+                const locStr = document.getElementById('setting-locations').value;
+                settings.locations = locStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
+
+                saveCsvToDrive();
+                settingsModal.classList.add('hidden');
+                renderApp();
+            });
+        }
 
         function setupModalListeners() {
             document.getElementById('export-btn').addEventListener('click', () => {
-                let csv = 'Datum;Typ;Start;Ende;Pause(min);Standort;Notiz\n';
+                let csv = "settings_json:" + JSON.stringify(settings) + "\n";
+                csv += 'Datum;Typ;Start;Ende;PauseHas;Standort;Notiz\n';
                 for (const [date, d] of Object.entries(timeData)) {
-                    csv += `${date};${d.type};${d.start};${d.end};${d.breakMin};${d.location};${d.note || ''}\n`;
+                    csv += `${date};${d.type};${d.start};${d.end};${d.pauseHas ? 'Ja' : 'Nein'};${d.location};${d.note || ''}\n`;
                 }
                 const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = 'dienstplan_lokaler_export.csv';
+                a.download = 'dienstplan_export.csv';
                 a.click();
             });
         }
@@ -483,7 +576,7 @@
     <header class="bg-blue-600 text-white shadow-md">
         <div class="container mx-auto px-4 py-4 flex flex-wrap justify-between items-center">
             <h1 class="text-xl font-bold flex items-center gap-2">
-                <i class="fa-solid fa-clock"></i> Private Arbeitszeiterfassung (Drive)
+                <i class="fa-solid fa-clock"></i> Private Arbeitszeiterfassung
             </h1>
             <div class="flex items-center gap-4 mt-2 sm:mt-0">
                 <div class="flex items-center text-sm bg-blue-700 px-3 py-1.5 rounded-full">
@@ -491,8 +584,8 @@
                     <span id="sync-status-text">Nicht angemeldet</span>
                 </div>
                 <span id="user-email" class="text-sm font-medium hidden sm:inline"></span>
-                <button id="login-btn" class="bg-white text-blue-600 px-3 py-1.5 rounded text-sm font-bold shadow hover:bg-gray-100">Mit Google anmelden</button>
-                <button id="logout-btn" class="bg-red-500 text-white px-3 py-1.5 rounded text-sm font-bold shadow hover:bg-red-600 hidden">Abmelden</button>
+                <button id="login-btn" class="bg-white text-blue-600 hover:bg-gray-100 px-3 py-1.5 rounded text-sm font-bold shadow">Mit Google anmelden</button>
+                <button id="logout-btn" class="bg-red-500 hover:bg-red-600 text-white px-3 py-1.5 rounded text-sm font-bold shadow hidden">Abmelden</button>
                 <button id="settings-btn" class="bg-blue-700 hover:bg-blue-800 p-2 rounded text-white" title="Einstellungen"><i class="fa-solid fa-gear"></i></button>
             </div>
         </div>
@@ -500,37 +593,38 @@
 
     <!-- Auth Warn Banner -->
     <div id="auth-banner" class="container mx-auto px-4 mt-4">
-        <div class="bg-amber-100 border-l-4 border-amber-500 text-amber-700 p-4 rounded shadow" role="alert">
-            <p class="font-bold">Google Anmeldung erforderlich</p>
-            <p>Bitte klicke oben auf <b>"Mit Google anmelden"</b>, um deine Arbeitszeiten direkt in deinem Google Drive (Ordner <i>Dienstplan</i>) zu speichern.</p>
+        <div class="bg-amber-100 border-l-4 border-amber-500 text-amber-800 p-4 rounded shadow flex justify-between items-center" role="alert">
+            <div>
+                <p class="font-bold">Google-Konto Verbinden</p>
+                <p class="text-sm">Melde dich an, um deine Arbeitszeiten direkt in deinem Google Drive (Ordner <i>Dienstplan</i>) zu sichern.</p>
+            </div>
         </div>
     </div>
 
-    <!-- Main App Container -->
-    <main id="main-content" class="container mx-auto px-4 py-6 flex-grow opacity-50 pointer-events-none transition-opacity duration-300">
+    <!-- Main Content Container -->
+    <main id="main-content" class="container mx-auto px-4 py-6 flex-grow transition-opacity duration-300">
         
-        <!-- Monat & KPIs Grid -->
+        <!-- Monat & KPIs -->
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-            
             <div class="lg:col-span-2 bg-white rounded-lg shadow p-4 flex flex-col justify-between">
                 <div class="flex justify-between items-center mb-4">
                     <button id="prev-month" class="bg-gray-200 hover:bg-gray-300 px-3 py-1.5 rounded font-bold"><i class="fa-solid fa-chevron-left"></i></button>
-                    <h2 id="month-title" class="text-xl font-bold">Monat Jahr</h2>
+                    <h2 id="month-title" class="text-xl font-bold text-gray-800">Monat Jahr</h2>
                     <button id="next-month" class="bg-gray-200 hover:bg-gray-300 px-3 py-1.5 rounded font-bold"><i class="fa-solid fa-chevron-right"></i></button>
                 </div>
 
                 <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
                     <div class="bg-gray-50 p-3 rounded border">
                         <div class="text-xs text-gray-500">Monat Soll</div>
-                        <div id="kpi-month-target" class="text-lg font-bold font-mono">0:00</div>
+                        <div id="kpi-month-target" class="text-lg font-bold font-mono text-gray-700">0:00</div>
                     </div>
                     <div class="bg-gray-50 p-3 rounded border">
                         <div class="text-xs text-gray-500">Ist-Zeit</div>
-                        <div id="kpi-month-actual" class="text-lg font-bold font-mono">0:00</div>
+                        <div id="kpi-month-actual" class="text-lg font-bold font-mono text-gray-700">0:00</div>
                     </div>
                     <div class="bg-gray-50 p-3 rounded border">
                         <div class="text-xs text-gray-500">Angerechnet</div>
-                        <div id="kpi-month-credited" class="text-lg font-bold font-mono">0:00</div>
+                        <div id="kpi-month-credited" class="text-lg font-bold font-mono text-gray-700">0:00</div>
                     </div>
                     <div class="bg-gray-50 p-3 rounded border">
                         <div class="text-xs text-gray-500">Monatssaldo</div>
@@ -539,31 +633,29 @@
                 </div>
             </div>
 
-            <!-- Rechte Spalte -->
             <div class="bg-white rounded-lg shadow p-4 flex flex-col justify-between border-l-4 border-blue-500">
                 <div>
-                    <h3 class="text-sm font-bold text-gray-500 uppercase tracking-wider mb-2">Google Drive Sync</h3>
-                    <p class="text-sm text-gray-600">Deine Daten werden automatisch als <code>dienstplan.csv</code> im Ordner <code>Dienstplan</code> auf deinem Google Drive gespeichert.</p>
+                    <h3 class="text-sm font-bold text-gray-500 uppercase tracking-wider mb-1">Google Drive Sync</h3>
+                    <p class="text-sm text-gray-600">Automatische Speicherung in <code>Dienstplan/dienstplan.csv</code> auf deinem Google Drive.</p>
                 </div>
                 <div class="mt-4 flex gap-2">
-                    <button id="export-btn" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded text-sm font-bold flex items-center justify-center gap-2">
-                        <i class="fa-solid fa-file-csv"></i> Lokaler CSV Export
+                    <button id="export-btn" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded text-sm font-bold flex items-center justify-center gap-2 shadow">
+                        <i class="fa-solid fa-file-csv"></i> CSV Exportieren
                     </button>
                 </div>
             </div>
-
         </div>
 
-        <!-- Tageserfassung Tabelle -->
+        <!-- Zeiterfassungs-Tabelle -->
         <div class="bg-white rounded-lg shadow overflow-x-auto">
-            <table class="w-full text-left border-collapse min-w-[800px]">
+            <table class="w-full text-left border-collapse min-w-[850px]">
                 <thead>
                     <tr class="bg-gray-100 border-b text-xs text-gray-600 uppercase">
                         <th class="p-3">Datum</th>
                         <th class="p-3">Tagesart</th>
                         <th class="p-3">Start</th>
                         <th class="p-3">Ende</th>
-                        <th class="p-3">Pause (Min)</th>
+                        <th class="p-3 text-center">Pause</th>
                         <th class="p-3">Standort</th>
                         <th class="p-3 text-right">Ist</th>
                         <th class="p-3 text-right">Saldo</th>
@@ -571,7 +663,7 @@
                     </tr>
                 </thead>
                 <tbody id="days-container">
-                    <!-- Dynamisch -->
+                    <!-- Wird dynamisch erzeugt -->
                 </tbody>
             </table>
         </div>
@@ -580,43 +672,48 @@
 
     <!-- Footer -->
     <footer class="text-center py-4 text-xs text-gray-500">
-        Private Arbeitszeiterfassung • Gesichert in Google Drive (dienstplan.csv)
+        Private Arbeitszeiterfassung • Google Drive Backup (dienstplan.csv)
     </footer>
 
-    <!-- Settings Modal -->
-    <div id="settings-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50">
-        <div class="bg-white rounded-lg shadow-lg w-full max-w-lg p-6 m-4">
-            <div class="flex justify-between items-center mb-4">
-                <h3 class="text-lg font-bold">Einstellungen</h3>
-                <button id="close-settings" class="text-gray-500 hover:text-gray-700 font-bold text-lg">&times;</button>
+    <!-- Einstellungen Modal -->
+    <div id="settings-modal" class="fixed inset-0 bg-black/50 flex items-center justify-center hidden z-50">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-lg p-6 m-4">
+            <div class="flex justify-between items-center mb-4 border-b pb-2">
+                <h3 class="text-lg font-bold text-gray-800"><i class="fa-solid fa-sliders mr-2"></i>Einstellungen</h3>
+                <button id="close-settings" class="text-gray-400 hover:text-gray-700 font-bold text-xl">&times;</button>
             </div>
             <form id="settings-form" class="space-y-4">
                 <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Soll-Arbeitszeit pro Woche (in Stunden)</label>
-                    <input type="number" step="0.5" id="setting-weekly-target" class="w-full border rounded p-2" required>
-                    <span class="text-xs text-gray-500">Wird automatisch auf die aktiven Arbeitstage aufgeteilt.</span>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Soll-Arbeitszeit pro Woche (Stunden)</label>
+                    <input type="number" step="0.5" id="setting-weekly-target" class="w-full border border-gray-300 rounded p-2 focus:ring-2 focus:ring-blue-500" required>
+                    <span class="text-xs text-gray-500">Wird gleichmäßig auf die aktiven Arbeitstage verteilt.</span>
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Standard Arbeitstage</label>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Standard Pause (in Minuten bei "Ja")</label>
+                    <input type="number" id="setting-default-pause" class="w-full border border-gray-300 rounded p-2 focus:ring-2 focus:ring-blue-500" placeholder="30" required>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Arbeitstage</label>
                     <div class="flex flex-wrap gap-3">
-                        <label class="flex items-center gap-1 text-sm"><input type="checkbox" id="day-1" value="1"> Mo</label>
-                        <label class="flex items-center gap-1 text-sm"><input type="checkbox" id="day-2" value="2"> Di</label>
-                        <label class="flex items-center gap-1 text-sm"><input type="checkbox" id="day-3" value="3"> Mi</label>
-                        <label class="flex items-center gap-1 text-sm"><input type="checkbox" id="day-4" value="4"> Do</label>
-                        <label class="flex items-center gap-1 text-sm"><input type="checkbox" id="day-5" value="5"> Fr</label>
-                        <label class="flex items-center gap-1 text-sm"><input type="checkbox" id="day-6" value="6"> Sa</label>
-                        <label class="flex items-center gap-1 text-sm"><input type="checkbox" id="day-0" value="0"> So</label>
+                        <label class="flex items-center gap-1 text-sm font-medium"><input type="checkbox" id="day-1" value="1" class="rounded text-blue-600"> Mo</label>
+                        <label class="flex items-center gap-1 text-sm font-medium"><input type="checkbox" id="day-2" value="2" class="rounded text-blue-600"> Di</label>
+                        <label class="flex items-center gap-1 text-sm font-medium"><input type="checkbox" id="day-3" value="3" class="rounded text-blue-600"> Mi</label>
+                        <label class="flex items-center gap-1 text-sm font-medium"><input type="checkbox" id="day-4" value="4" class="rounded text-blue-600"> Do</label>
+                        <label class="flex items-center gap-1 text-sm font-medium"><input type="checkbox" id="day-5" value="5" class="rounded text-blue-600"> Fr</label>
+                        <label class="flex items-center gap-1 text-sm font-medium"><input type="checkbox" id="day-6" value="6" class="rounded text-blue-600"> Sa</label>
+                        <label class="flex items-center gap-1 text-sm font-medium"><input type="checkbox" id="day-0" value="0" class="rounded text-blue-600"> So</label>
                     </div>
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Standorte (durch Komma getrennt)</label>
-                    <input type="text" id="setting-locations" class="w-full border rounded p-2" placeholder="Homeoffice, Büro, Kunden vor Ort">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Standorte (kommagetrennt)</label>
+                    <input type="text" id="setting-locations" class="w-full border border-gray-300 rounded p-2 focus:ring-2 focus:ring-blue-500" placeholder="Homeoffice, Büro, Unterwegs">
                 </div>
 
-                <div class="flex justify-end gap-2 pt-4">
-                    <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-bold">Speichern</button>
+                <div class="flex justify-end gap-2 pt-4 border-t">
+                    <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded text-sm font-bold shadow">Speichern</button>
                 </div>
             </form>
         </div>

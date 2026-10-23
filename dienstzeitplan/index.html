@@ -1,501 +1,672 @@
 <!DOCTYPE html>
-<html lang="de">
+<html lang="de" class="h-full bg-slate-900">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Private Arbeitszeiterfassung (PWA)</title>
-    <!-- Tailwind CSS CDN -->
+    <title>Private Arbeitszeiterfassung PWA</title>
+    <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <!-- FontAwesome für Icons -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- PWA Manifest -->
-    <link rel="manifest" href="data:application/manifest+json;charset=utf-8,%7B%22name%22%3A%22Private%20Arbeitszeiterfassung%22%2C%22short_name%22%3A%22PWA%20Zeiterfassung%22%2C%22start_url%22%3A%22.%2F%22%2C%22display%22%3A%22standalone%22%2C%22background_color%22%3A%22%23f3f4f6%22%2C%22theme_color%22%3A%22%232563eb%22%2C%22icons%22%3A%5B%5D%7D">
-    <style>
-        .input-time { font-family: monospace; }
-    </style>
-</head>
-<body class="bg-gray-100 min-h-screen text-gray-800 flex flex-col">
-
-    <!-- Firebase SDKs -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-        import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
-        import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
-
-        // Firebase Konfiguration (wird automatisch durch GitHub Actions Secrets ersetzt)
-        const firebaseConfig = {
-            apiKey: "__FIREBASE_API_KEY__",
-            authDomain: "__FIREBASE_AUTH_DOMAIN__",
-            projectId: "__FIREBASE_PROJECT_ID__",
-            storageBucket: "__FIREBASE_STORAGE_BUCKET__",
-            messagingSenderId: "__FIREBASE_MESSAGING_SENDER_ID__",
-            appId: "__FIREBASE_APP_ID__"
-        };
-
-        // Globale Firebase-Referenzen
-        let app, auth, db, currentUser = null;
-        let isFirebaseInitialized = false;
-
-        try {
-            if (firebaseConfig.apiKey && !firebaseConfig.apiKey.startsWith("__")) {
-                app = initializeApp(firebaseConfig);
-                auth = getAuth(app);
-                db = getFirestore(app);
-                isFirebaseInitialized = true;
-            }
-        } catch (e) {
-            console.error("Firebase Init Fehler:", e);
-        }
-
-        // App State
-        let currentDate = new Date();
-        let timeData = {}; // Format: "YYYY-MM-DD" -> Data
-        let settings = {
-            weeklyTargetMinutes: 2400, // 40 Stunden in Minuten
-            workDays: [1, 2, 3, 4, 5, 6], // Mo-Sa Standard
-            locations: ["Homeoffice", "Büro Hauptsitz", "Filiale", "Kunden vor Ort", "Unterwegs"],
-            absenceDefaults: {
-                "Urlaub": 480,
-                "Krankheit": 480,
-                "Feiertag": 480,
-                "Kein Dienst": 0,
-                "Sonstige": 0
-            }
-        };
-
-        // DOM Elements
-        const authBanner = document.getElementById('auth-banner');
-        const loginBtn = document.getElementById('login-btn');
-        const logoutBtn = document.getElementById('logout-btn');
-        const userEmailSpan = document.getElementById('user-email');
-        const mainContent = document.getElementById('main-content');
-        const monthTitle = document.getElementById('month-title');
-        const daysContainer = document.getElementById('days-container');
-        
-        // KPIs
-        const kpiMonthTarget = document.getElementById('kpi-month-target');
-        const kpiMonthActual = document.getElementById('kpi-month-actual');
-        const kpiMonthCredited = document.getElementById('kpi-month-credited');
-        const kpiMonthBalance = document.getElementById('kpi-month-balance');
-
-        window.addEventListener('DOMContentLoaded', () => {
-            setupAuth();
-            setupNavigation();
-            setupModalListeners();
-            setupSettingsForm();
-        });
-
-        function setupAuth() {
-            if (!isFirebaseInitialized) {
-                authBanner.classList.remove('hidden');
-                authBanner.innerHTML = `<div class="bg-amber-100 border-l-4 border-amber-500 text-amber-700 p-4 mb-4" role="alert">
-                    <p class="font-bold">Konfiguration wird geladen</p>
-                    <p>Warte auf GitHub Actions Secret Injection oder trage die Daten lokal ein.</p>
-                </div>`;
-                // Trotz fehlender Cloud im lokalen Modus lauffähig machen für Tests:
-                mainContent.classList.remove('opacity-50', 'pointer-events-none');
-                renderApp();
-                return;
-            }
-
-            onAuthStateChanged(auth, async (user) => {
-                if (user) {
-                    currentUser = user;
-                    authBanner.classList.add('hidden');
-                    mainContent.classList.remove('opacity-50', 'pointer-events-none');
-                    userEmailSpan.textContent = user.email;
-                    loginBtn.classList.add('hidden');
-                    logoutBtn.classList.remove('hidden');
-                    await loadDataFromCloud();
-                } else {
-                    currentUser = null;
-                    authBanner.classList.remove('hidden');
-                    mainContent.classList.add('opacity-50', 'pointer-events-none');
-                    userEmailSpan.textContent = '';
-                    loginBtn.classList.remove('hidden');
-                    logoutBtn.classList.add('hidden');
-                }
-            });
-
-            loginBtn.addEventListener('click', async () => {
-                const provider = new GoogleAuthProvider();
-                try {
-                    await signInWithPopup(auth, provider);
-                } catch (error) {
-                    alert("Anmeldung fehlgeschlagen: " + error.message);
-                }
-            });
-
-            logoutBtn.addEventListener('click', async () => {
-                await signOut(auth);
-                timeData = {};
-                renderApp();
-            });
-        }
-
-        async function saveDataToCloud() {
-            if (!currentUser || !db) return;
-            try {
-                const docRef = doc(db, "users", currentUser.uid, "data", "timesheet");
-                await setDoc(docRef, {
-                    timeData: timeData,
-                    settings: settings,
-                    updatedAt: new Date().toISOString()
-                });
-                showSyncStatus("Gespeichert", "bg-green-500");
-            } catch (e) {
-                console.error("Speicherfehler:", e);
-                showSyncStatus("Fehler beim Speichern", "bg-red-500");
-            }
-        }
-
-        async function loadDataFromCloud() {
-            if (!currentUser || !db) return;
-            try {
-                const docRef = doc(db, "users", currentUser.uid, "data", "timesheet");
-                const docSnap = await getDoc(docRef);
-                if (docSnap.exists()) {
-                    const data = docSnap.data();
-                    timeData = data.timeData || {};
-                    if (data.settings) {
-                        settings = { ...settings, ...data.settings };
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        brand: {
+                            50: '#f0fdf4',
+                            100: '#dcfce7',
+                            500: '#22c55e',
+                            600: '#16a34a',
+                            700: '#15803d',
+                        }
                     }
                 }
-                renderApp();
-                showSyncStatus("Verbunden & Synchronisiert", "bg-green-500");
-            } catch (e) {
-                console.error("Ladefehler:", e);
-                showSyncStatus("Ladefehler", "bg-red-500");
             }
-        }
-
-        function showSyncStatus(msg, colorClass) {
-            const badge = document.getElementById('sync-status-badge');
-            badge.className = `inline-block w-3 h-3 rounded-full ${colorClass} mr-2`;
-            document.getElementById('sync-status-text').textContent = msg;
-        }
-
-        function setupNavigation() {
-            document.getElementById('prev-month').addEventListener('click', () => {
-                currentDate.setMonth(currentDate.getMonth() - 1);
-                renderApp();
-            });
-            document.getElementById('next-month').addEventListener('click', () => {
-                currentDate.setMonth(currentDate.getMonth() + 1);
-                renderApp();
-            });
-            document.getElementById('settings-btn').addEventListener('click', () => {
-                openSettingsModal();
-            });
-        }
-
-        // Haupt-Render-Logik: Zeigt IMMER alle Tage des Monats an
-        function renderApp() {
-            const year = currentDate.getFullYear();
-            const month = currentDate.getMonth();
-            const monthNames = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli", "August", "September", "Oktober", "November", "Dezember"];
-            monthTitle.textContent = `${monthNames[month]} ${year}`;
-
-            daysContainer.innerHTML = '';
-
-            const daysInMonth = new Date(year, month + 1, 0).getDate();
-            let monthTargetMin = 0;
-            let monthActualMin = 0;
-            let monthCreditedMin = 0;
-
-            const activeWorkDaysCount = settings.workDays.length;
-            const dailyTargetMin = activeWorkDaysCount > 0 ? Math.round(settings.weeklyTargetMinutes / activeWorkDaysCount) : 480;
-
-            // Schleife über JEDEN Tag des Monats (1 bis Monatsende)
-            for (let day = 1; day <= daysInMonth; day++) {
-                const dateObj = new Date(year, month, day);
-                const isoDate = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-                const dayOfWeek = dateObj.getDay(); // 0 = So, 6 = Sa
-                const isWorkDay = settings.workDays.includes(dayOfWeek);
-
-                // Wenn für diesen Tag noch kein Eintrag existiert, automatisch initialisieren
-                if (!timeData[isoDate]) {
-                    timeData[isoDate] = {
-                        type: isWorkDay ? "Arbeit" : "Kein Dienst",
-                        start: isWorkDay ? "08:00" : "",
-                        end: isWorkDay ? "16:30" : "",
-                        breakMin: 30,
-                        location: settings.locations[0] || "",
-                        note: ""
-                    };
-                }
-                const d = timeData[isoDate];
-
-                const targetMin = (d.type === "Arbeit" && isWorkDay) ? dailyTargetMin : 0;
-                monthTargetMin += targetMin;
-
-                let actualMin = 0;
-                if (d.start && d.end && d.type === "Arbeit") {
-                    const [sH, sM] = d.start.split(':').map(Number);
-                    const [eH, eM] = d.end.split(':').map(Number);
-                    actualMin = (eH * 60 + eM) - (sH * 60 + sM) - (Number(d.breakMin) || 0);
-                    if (actualMin < 0) actualMin = 0;
-                }
-                monthActualMin += actualMin;
-
-                let creditedMin = 0;
-                if (d.type === "Arbeit") {
-                    creditedMin = actualMin;
-                } else {
-                    creditedMin = settings.absenceDefaults[d.type] !== undefined ? settings.absenceDefaults[d.type] : 0;
-                }
-                monthCreditedMin += creditedMin;
-
-                const dayBalance = creditedMin - targetMin;
-
-                const row = document.createElement('tr');
-                row.className = `border-b hover:bg-gray-50 ${dayOfWeek === 0 || dayOfWeek === 6 ? 'bg-gray-50 text-gray-500' : ''}`;
-                
-                const formattedDate = dateObj.toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' });
-                let locOptions = settings.locations.map(loc => `<option value="${loc}" ${d.location === loc ? 'selected' : ''}>${loc}</option>`).join('');
-
-                row.innerHTML = `
-                    <td class="p-2 font-medium">${formattedDate}</td>
-                    <td class="p-2">
-                        <select data-date="${isoDate}" data-field="type" class="day-input bg-white border rounded px-1 py-1 text-sm">
-                            <option value="Arbeit" ${d.type === 'Arbeit' ? 'selected' : ''}>Arbeit</option>
-                            <option value="Urlaub" ${d.type === 'Urlaub' ? 'selected' : ''}>Urlaub</option>
-                            <option value="Krankheit" ${d.type === 'Krankheit' ? 'selected' : ''}>Krankheit</option>
-                            <option value="Feiertag" ${d.type === 'Feiertag' ? 'selected' : ''}>Feiertag</option>
-                            <option value="Kein Dienst" ${d.type === 'Kein Dienst' ? 'selected' : ''}>Kein Dienst</option>
-                            <option value="Sonstige" ${d.type === 'Sonstige' ? 'selected' : ''}>Sonstige</option>
-                        </select>
-                    </td>
-                    <td class="p-2"><input type="time" data-date="${isoDate}" data-field="start" value="${d.start}" class="day-input input-time border rounded px-1 py-1 text-sm w-24"></td>
-                    <td class="p-2"><input type="time" data-date="${isoDate}" data-field="end" value="${d.end}" class="day-input input-time border rounded px-1 py-1 text-sm w-24"></td>
-                    <td class="p-2"><input type="number" data-date="${isoDate}" data-field="breakMin" value="${d.breakMin}" class="day-input border rounded px-1 py-1 text-sm w-16"></td>
-                    <td class="p-2">
-                        <select data-date="${isoDate}" data-field="location" class="day-input bg-white border rounded px-1 py-1 text-sm">
-                            ${locOptions}
-                        </select>
-                    </td>
-                    <td class="p-2 font-mono text-right">${formatMinutes(actualMin)}</td>
-                    <td class="p-2 font-mono text-right ${dayBalance >= 0 ? 'text-green-600' : 'text-red-600'}">${formatMinutes(dayBalance)}</td>
-                    <td class="p-2"><input type="text" data-date="${isoDate}" data-field="note" value="${d.note || ''}" placeholder="Notiz..." class="day-input border rounded px-2 py-1 text-sm w-full"></td>
-                `;
-                daysContainer.appendChild(row);
-            }
-
-            const monthBalanceMin = monthCreditedMin - monthTargetMin;
-            kpiMonthTarget.textContent = formatMinutes(monthTargetMin);
-            kpiMonthActual.textContent = formatMinutes(monthActualMin);
-            kpiMonthCredited.textContent = formatMinutes(monthCreditedMin);
-            kpiMonthBalance.textContent = formatMinutes(monthBalanceMin);
-            kpiMonthBalance.className = `text-xl font-bold font-mono ${monthBalanceMin >= 0 ? 'text-green-600' : 'text-red-600'}`;
-
-            document.querySelectorAll('.day-input').forEach(input => {
-                input.addEventListener('change', (e) => {
-                    const date = e.target.dataset.date;
-                    const field = e.target.dataset.field;
-                    let val = e.target.value;
-                    if (timeData[date]) {
-                        timeData[date][field] = val;
-                        saveDataToCloud();
-                        renderApp();
-                    }
-                });
-            });
-        }
-
-        function formatMinutes(min) {
-            const sign = min < 0 ? '-' : '';
-            const absMin = Math.abs(min);
-            const hours = Math.floor(absMin / 60);
-            const minutes = absMin % 60;
-            return `${sign}${hours}:${String(minutes).padStart(2, '0')}`;
-        }
-
-        const settingsModal = document.getElementById('settings-modal');
-        function openSettingsModal() {
-            document.getElementById('setting-weekly-target').value = (settings.weeklyTargetMinutes / 60).toFixed(1);
-            [1, 2, 3, 4, 5, 6, 0].forEach(day => {
-                document.getElementById(`day-${day}`).checked = settings.workDays.includes(day);
-            });
-            document.getElementById('setting-locations').value = settings.locations.join(', ');
-            settingsModal.classList.remove('hidden');
-        }
-
-        document.getElementById('close-settings').addEventListener('click', () => {
-            settingsModal.classList.add('hidden');
-        });
-
-        document.getElementById('settings-form').addEventListener('submit', (e) => {
-            e.preventDefault();
-            const weeklyHours = parseFloat(document.getElementById('setting-weekly-target').value) || 40;
-            settings.weeklyTargetMinutes = Math.round(weeklyHours * 60);
-            settings.workDays = [1, 2, 3, 4, 5, 6, 0].filter(day => document.getElementById(`day-${day}`).checked);
-            const locStr = document.getElementById('setting-locations').value;
-            settings.locations = locStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
-
-            saveDataToCloud();
-            settingsModal.classList.add('hidden');
-            renderApp();
-        });
-
-        function setupModalListeners() {
-            document.getElementById('export-btn').addEventListener('click', () => {
-                let csv = 'Datum;Typ;Start;Ende;Pause(min);Standort;Notiz\n';
-                for (const [date, d] of Object.entries(timeData)) {
-                    csv += `${date};${d.type};${d.start};${d.end};${d.breakMin};${d.location};${d.note || ''}\n`;
-                }
-                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'arbeitszeiten_export.csv';
-                a.click();
-            });
         }
     </script>
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Firebase SDK (Modular ESM imports via Script Module) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
+        import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
-    <!-- Header -->
-    <header class="bg-blue-600 text-white shadow-md">
-        <div class="container mx-auto px-4 py-4 flex flex-wrap justify-between items-center">
-            <h1 class="text-xl font-bold flex items-center gap-2">
-                <i class="fa-solid fa-clock"></i> Private Arbeitszeiterfassung
-            </h1>
-            <div class="flex items-center gap-4 mt-2 sm:mt-0">
-                <div class="flex items-center text-sm bg-blue-700 px-3 py-1.5 rounded-full">
-                    <span id="sync-status-badge" class="inline-block w-3 h-3 rounded-full bg-gray-400 mr-2"></span>
-                    <span id="sync-status-text">Nicht verbunden</span>
+        window.FirebaseModule = {
+            initializeApp,
+            getAuth,
+            signInWithPopup,
+            GoogleAuthProvider,
+            onAuthStateChanged,
+            signOut,
+            getFirestore,
+            doc,
+            setDoc,
+            getDoc,
+            onSnapshot
+        };
+    </script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans antialiased selection:bg-emerald-500 selection:text-white flex flex-col">
+
+    <!-- Cloud Connection Warning Banner (Shown when not authenticated / no cloud connection) -->
+    <div id="cloud-warning-banner" class="bg-amber-500/20 border-b border-amber-500/30 text-amber-300 px-4 py-2.5 text-xs sm:text-sm font-medium flex items-center justify-between gap-3 backdrop-blur-md">
+        <div class="flex items-center gap-2 max-w-4xl mx-auto w-full">
+            <i class="fa-solid fa-triangle-exclamation text-amber-400 text-base animate-pulse"></i>
+            <span><strong>Keine aktive Cloud-Verbindung:</strong> Bitte melde dich mit deinem Google-Konto an. Eingaben werden erst nach Cloud-Authentifizierung gespeichert & synchronisiert!</span>
+        </div>
+        <button id="btn-banner-login" class="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold rounded-lg text-xs transition-all shadow-md whitespace-nowrap">
+            <i class="fa-brands fa-google mr-1"></i> Anmelden
+        </button>
+    </div>
+
+    <!-- Top Navigation & Auto-Sync Bar -->
+    <header class="sticky top-0 z-40 bg-slate-900/90 backdrop-blur-md border-b border-slate-800 px-4 py-3 shadow-lg">
+        <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-4">
+            
+            <!-- App Logo & Title -->
+            <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-400 flex items-center justify-center text-slate-950 font-bold text-xl shadow-lg shadow-emerald-500/20">
+                    <i class="fa-solid fa-business-time"></i>
                 </div>
-                <span id="user-email" class="text-sm font-medium hidden sm:inline"></span>
-                <button id="login-btn" class="bg-white text-blue-600 px-3 py-1.5 rounded text-sm font-bold shadow hover:bg-gray-100">Mit Google anmelden</button>
-                <button id="logout-btn" class="bg-red-500 text-white px-3 py-1.5 rounded text-sm font-bold shadow hover:bg-red-600 hidden">Abmelden</button>
-                <button id="settings-btn" class="bg-blue-700 hover:bg-blue-800 p-2 rounded text-white" title="Einstellungen"><i class="fa-solid fa-gear"></i></button>
+                <div>
+                    <h1 class="font-bold text-lg leading-tight tracking-tight text-white flex items-center gap-2">
+                        Zeiterfassung
+                        <span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-semibold">PWA v1.0</span>
+                    </h1>
+                    <p class="text-xs text-slate-400">Cloud-Synced • Flexible Standorte</p>
+                </div>
+            </div>
+
+            <!-- Dynamic Auto-Save & Cloud Status Indicator -->
+            <div id="save-status-bar" class="flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold transition-all duration-300 bg-slate-800 text-slate-400 border border-slate-700">
+                <span class="relative flex h-2 w-2">
+                  <span id="status-ping" class="absolute inline-flex h-full w-full rounded-full bg-slate-400 opacity-75"></span>
+                  <span id="status-dot" class="relative inline-flex rounded-full h-2 w-2 bg-slate-500"></span>
+                </span>
+                <i id="status-icon" class="fa-solid fa-cloud-slash text-xs"></i>
+                <span id="status-text">Nicht verbunden</span>
+            </div>
+
+            <!-- Header Controls & Month Selector -->
+            <div class="flex items-center gap-2">
+                <!-- Month / Year Selector -->
+                <div class="flex items-center bg-slate-800/90 rounded-lg p-1 border border-slate-700">
+                    <button id="prev-month" class="p-1.5 hover:bg-slate-700 rounded-md text-slate-300 transition-colors" title="Vorheriger Monat">
+                        <i class="fa-solid fa-chevron-left text-xs"></i>
+                    </button>
+                    <input type="month" id="month-picker" class="bg-transparent text-sm font-semibold text-slate-200 border-none focus:outline-none px-2 cursor-pointer">
+                    <button id="next-month" class="p-1.5 hover:bg-slate-700 rounded-md text-slate-300 transition-colors" title="Nächster Monat">
+                        <i class="fa-solid fa-chevron-right text-xs"></i>
+                    </button>
+                </div>
+
+                <!-- User Profile / Auth Button -->
+                <button id="btn-auth" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg border border-slate-700 text-xs font-semibold transition-all flex items-center gap-2">
+                    <i class="fa-brands fa-google text-emerald-400"></i>
+                    <span id="auth-btn-text">Anmelden</span>
+                </button>
+
+                <!-- Settings Button -->
+                <button id="btn-settings" class="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg border border-slate-700 transition-colors" title="Einstellungen & Standorte">
+                    <i class="fa-solid fa-gear"></i>
+                </button>
             </div>
         </div>
     </header>
 
-    <!-- Auth Warn Banner -->
-    <div id="auth-banner" class="container mx-auto px-4 mt-4">
-        <div class="bg-amber-100 border-l-4 border-amber-500 text-amber-700 p-4 rounded shadow" role="alert">
-            <p class="font-bold">Anmeldung erforderlich</p>
-            <p>Bitte melde dich oben mit deinem Google-Konto an, um deine Arbeitszeiten sicher in der Cloud zu speichern.</p>
+    <!-- Main Workspace -->
+    <main class="max-w-7xl mx-auto p-4 sm:p-6 space-y-6 flex-grow w-full">
+
+        <!-- KPI Balance Dashboard -->
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between backdrop-blur-sm shadow-md">
+                <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Monats-Soll</span>
+                <div class="mt-2 text-2xl font-extrabold text-slate-100 font-mono" id="stat-month-soll">00:00 h</div>
+                <span class="text-[10px] text-slate-500 mt-1">Geplante Arbeitszeit</span>
+            </div>
+            <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between backdrop-blur-sm shadow-md">
+                <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Monats-Ist</span>
+                <div class="mt-2 text-2xl font-extrabold text-slate-100 font-mono" id="stat-month-ist">00:00 h</div>
+                <span class="text-[10px] text-slate-500 mt-1">Netto-Arbeitszeit</span>
+            </div>
+            <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between backdrop-blur-sm shadow-md">
+                <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Monatssaldo</span>
+                <div class="mt-2 text-2xl font-extrabold font-mono" id="stat-month-saldo">00:00 h</div>
+                <span class="text-[10px] text-slate-500 mt-1">Differenz (+ / -)</span>
+            </div>
+            <div class="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 flex flex-col justify-between backdrop-blur-sm shadow-md">
+                <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Urlaubstage</span>
+                <div class="mt-2 text-2xl font-extrabold text-teal-400 font-mono" id="stat-vacation-days">0 Tage</div>
+                <span class="text-[10px] text-slate-500 mt-1">Im gewählten Monat</span>
+            </div>
         </div>
-    </div>
 
-    <!-- Main App Container -->
-    <main id="main-content" class="container mx-auto px-4 py-6 flex-grow opacity-50 pointer-events-none transition-opacity duration-300">
-        
-        <!-- Monat Navigation & KPIs Grid (Wochensumme/Infos rechts platziert) -->
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-            
-            <!-- Monat & KPI Übersicht -->
-            <div class="lg:col-span-2 bg-white rounded-lg shadow p-4 flex flex-col justify-between">
-                <div class="flex justify-between items-center mb-4">
-                    <button id="prev-month" class="bg-gray-200 hover:bg-gray-300 px-3 py-1.5 rounded font-bold"><i class="fa-solid fa-chevron-left"></i></button>
-                    <h2 id="month-title" class="text-xl font-bold">Monat Jahr</h2>
-                    <button id="next-month" class="bg-gray-200 hover:bg-gray-300 px-3 py-1.5 rounded font-bold"><i class="fa-solid fa-chevron-right"></i></button>
-                </div>
-
-                <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 text-center">
-                    <div class="bg-gray-50 p-3 rounded border">
-                        <div class="text-xs text-gray-500">Monat Soll</div>
-                        <div id="kpi-month-target" class="text-lg font-bold font-mono">0:00</div>
-                    </div>
-                    <div class="bg-gray-50 p-3 rounded border">
-                        <div class="text-xs text-gray-500">Ist-Zeit</div>
-                        <div id="kpi-month-actual" class="text-lg font-bold font-mono">0:00</div>
-                    </div>
-                    <div class="bg-gray-50 p-3 rounded border">
-                        <div class="text-xs text-gray-500">Angerechnet</div>
-                        <div id="kpi-month-credited" class="text-lg font-bold font-mono">0:00</div>
-                    </div>
-                    <div class="bg-gray-50 p-3 rounded border">
-                        <div class="text-xs text-gray-500">Monatssaldo</div>
-                        <div id="kpi-month-balance" class="text-xl font-bold font-mono">0:00</div>
-                    </div>
+        <!-- Timesheet Table Card -->
+        <div class="bg-slate-900/70 border border-slate-800 rounded-2xl overflow-hidden shadow-2xl backdrop-blur-md">
+            <div class="p-4 border-b border-slate-800 flex flex-wrap justify-between items-center gap-2 bg-slate-900/90">
+                <h2 class="font-bold text-slate-200 flex items-center gap-2.5">
+                    <i class="fa-solid fa-calendar-days text-emerald-400"></i>
+                    Tagesübersicht
+                </h2>
+                <div id="cloud-sync-note" class="text-xs text-amber-400 flex items-center gap-1.5 font-medium">
+                    <i class="fa-solid fa-lock text-xs"></i> Cloud-Anmeldung erforderlich zum Speichern
                 </div>
             </div>
 
-            <!-- Rechte Spalte (Aktionen & Info) -->
-            <div class="bg-white rounded-lg shadow p-4 flex flex-col justify-between border-l-4 border-blue-500">
-                <div>
-                    <h3 class="text-sm font-bold text-gray-500 uppercase tracking-wider mb-2">Cloud & Aktionen</h3>
-                    <p class="text-sm text-gray-600">Eingaben werden bei aktiver Cloud-Verbindung vollautomatisch gespeichert.</p>
-                </div>
-                <div class="mt-4 flex gap-2">
-                    <button id="export-btn" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded text-sm font-bold flex items-center justify-center gap-2">
-                        <i class="fa-solid fa-file-csv"></i> CSV Export
-                    </button>
-                </div>
+            <!-- Table Container -->
+            <div class="overflow-x-auto">
+                <table class="w-full text-left text-sm text-slate-300">
+                    <thead class="text-[11px] text-slate-400 uppercase bg-slate-950/80 border-b border-slate-800">
+                        <tr>
+                            <th scope="col" class="py-3 px-3">Datum</th>
+                            <th scope="col" class="py-3 px-3">Tagesart</th>
+                            <th scope="col" class="py-3 px-3">Soll (Start - Ende / Pause)</th>
+                            <th scope="col" class="py-3 px-3">Ist (Start - Ende / Pause)</th>
+                            <th scope="col" class="py-3 px-3 text-right">Netto Ist</th>
+                            <th scope="col" class="py-3 px-3 text-right">Saldo</th>
+                            <th scope="col" class="py-3 px-3">Standort (Dropdown)</th>
+                            <th scope="col" class="py-3 px-3">Notiz</th>
+                        </tr>
+                    </thead>
+                    <tbody id="timesheet-body" class="divide-y divide-slate-800/60">
+                        <!-- Dynamic Rows generated via JS -->
+                    </tbody>
+                </table>
             </div>
-
         </div>
-
-        <!-- Tageserfassung Tabelle (Zeigt immer alle Tage des Monats) -->
-        <div class="bg-white rounded-lg shadow overflow-x-auto">
-            <table class="w-full text-left border-collapse min-w-[800px]">
-                <thead>
-                    <tr class="bg-gray-100 border-b text-xs text-gray-600 uppercase">
-                        <th class="p-3">Datum</th>
-                        <th class="p-3">Tagesart</th>
-                        <th class="p-3">Start</th>
-                        <th class="p-3">Ende</th>
-                        <th class="p-3">Pause (Min)</th>
-                        <th class="p-3">Standort</th>
-                        <th class="p-3 text-right">Ist</th>
-                        <th class="p-3 text-right">Saldo</th>
-                        <th class="p-3">Notiz</th>
-                    </tr>
-                </thead>
-                <tbody id="days-container">
-                    <!-- Wird dynamisch für alle Tage des Monats befüllt -->
-                </tbody>
-            </table>
-        </div>
-
     </main>
 
-    <!-- Footer -->
-    <footer class="text-center py-4 text-xs text-gray-500">
-        Private Arbeitszeiterfassung (PWA) • Cloud-gesichert via Google Firebase
-    </footer>
-
-    <!-- Settings Modal -->
-    <div id="settings-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50">
-        <div class="bg-white rounded-lg shadow-lg w-full max-w-lg p-6 m-4">
-            <div class="flex justify-between items-center mb-4">
-                <h3 class="text-lg font-bold">Einstellungen</h3>
-                <button id="close-settings" class="text-gray-500 hover:text-gray-700 font-bold text-lg">&times;</button>
+    <!-- Settings & Location Configuration Modal -->
+    <div id="settings-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 hidden">
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 max-h-[90vh] overflow-y-auto">
+            <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+                <h3 class="text-lg font-bold text-white flex items-center gap-2">
+                    <i class="fa-solid fa-sliders text-emerald-400"></i> Einstellungen & Standorte
+                </h3>
+                <button id="close-settings" class="text-slate-400 hover:text-white p-1">
+                    <i class="fa-solid fa-xmark text-lg"></i>
+                </button>
             </div>
-            <form id="settings-form" class="space-y-4">
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Soll-Arbeitszeit pro Woche (in Stunden)</label>
-                    <input type="number" step="0.5" id="setting-weekly-target" class="w-full border rounded p-2" required>
-                    <span class="text-xs text-gray-500">Wird automatisch auf die aktiven Arbeitstage aufgeteilt.</span>
-                </div>
 
+            <div class="space-y-4 text-sm text-slate-300">
+                <!-- Standard Hours Template -->
                 <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Standard Arbeitstage</label>
-                    <div class="flex flex-wrap gap-3">
-                        <label class="flex items-center gap-1 text-sm"><input type="checkbox" id="day-1" value="1"> Mo</label>
-                        <label class="flex items-center gap-1 text-sm"><input type="checkbox" id="day-2" value="2"> Di</label>
-                        <label class="flex items-center gap-1 text-sm"><input type="checkbox" id="day-3" value="3"> Mi</label>
-                        <label class="flex items-center gap-1 text-sm"><input type="checkbox" id="day-4" value="4"> Do</label>
-                        <label class="flex items-center gap-1 text-sm"><input type="checkbox" id="day-5" value="5"> Fr</label>
-                        <label class="flex items-center gap-1 text-sm"><input type="checkbox" id="day-6" value="6"> Sa</label>
-                        <label class="flex items-center gap-1 text-sm"><input type="checkbox" id="day-0" value="0"> So</label>
+                    <label class="block text-xs font-semibold text-slate-400 uppercase mb-2">Standard Soll-Arbeitszeit</label>
+                    <div class="grid grid-cols-3 gap-2">
+                        <div>
+                            <span class="text-[10px] text-slate-500 uppercase">Start</span>
+                            <input type="time" id="cfg-default-start" value="08:00" class="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-white focus:border-emerald-500 focus:outline-none">
+                        </div>
+                        <div>
+                            <span class="text-[10px] text-slate-500 uppercase">Ende</span>
+                            <input type="time" id="cfg-default-end" value="16:30" class="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-white focus:border-emerald-500 focus:outline-none">
+                        </div>
+                        <div>
+                            <span class="text-[10px] text-slate-500 uppercase">Pause (Min)</span>
+                            <input type="number" id="cfg-default-pause" value="30" class="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-white focus:border-emerald-500 focus:outline-none">
+                        </div>
                     </div>
                 </div>
 
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Standorte (durch Komma getrennt)</label>
-                    <input type="text" id="setting-locations" class="w-full border rounded p-2" placeholder="Homeoffice, Büro, Kunden vor Ort">
+                <!-- Standort Dropdown Options Management -->
+                <div class="pt-3 border-t border-slate-800">
+                    <label class="block text-xs font-semibold text-slate-400 uppercase mb-1">Standort-Auswahloptionen</label>
+                    <p class="text-xs text-slate-500 mb-2">Gib hier komma-getrennt die Standorte für das Dropdown-Menü ein:</p>
+                    <input type="text" id="cfg-locations" value="Homeoffice, Büro Hauptsitz, Büro Filiale, Außendienst / Kunde, Unterwegs" class="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-xs text-slate-200 focus:border-emerald-500 focus:outline-none">
                 </div>
 
-                <div class="flex justify-end gap-2 pt-4">
-                    <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm font-bold">Speichern</button>
+                <!-- Firebase Configuration Input -->
+                <div class="pt-3 border-t border-slate-800">
+                    <label class="block text-xs font-semibold text-slate-400 uppercase mb-1">Firebase Cloud Konfiguration (JSON)</label>
+                    <p class="text-xs text-slate-500 mb-2">Gib hier deine Firebase Web-App Konfiguration ein, um die Cloud-Synchronisierung zu aktivieren:</p>
+                    <textarea id="cfg-firebase-json" rows="4" placeholder='{ "apiKey": "...", "authDomain": "...", "projectId": "..." }' class="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-xs font-mono text-slate-200 focus:border-emerald-500 focus:outline-none"></textarea>
                 </div>
-            </form>
+
+                <!-- Export / Import Options -->
+                <div class="pt-3 border-t border-slate-800 flex justify-between items-center">
+                    <button id="btn-export-csv" class="px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-lg text-xs font-medium transition-colors flex items-center gap-2">
+                        <i class="fa-solid fa-file-csv text-emerald-400"></i> CSV-Export
+                    </button>
+                    <label class="px-3 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 rounded-lg text-xs font-medium cursor-pointer transition-colors flex items-center gap-2">
+                        <i class="fa-solid fa-file-import text-teal-400"></i> CSV-Import
+                        <input type="file" id="btn-import-csv" accept=".csv" class="hidden">
+                    </label>
+                </div>
+            </div>
+            
+            <div class="text-right text-xs text-slate-500 italic pt-2">
+                Einstellungen werden bei aktiver Cloud-Verbindung gespeichert.
+            </div>
         </div>
     </div>
 
+    <!-- Application Script -->
+    <script type="module">
+        // Global State
+        let currentDate = new Date();
+        let isAuthenticated = false;
+        let currentUser = null;
+        let firebaseApp = null;
+        let auth = null;
+        let db = null;
+
+        let appState = {
+            settings: {
+                defaultStart: "08:00",
+                defaultEnd: "16:30",
+                defaultPause: 30,
+                locations: ["Homeoffice", "Büro Hauptsitz", "Büro Filiale", "Außendienst / Kunde", "Unterwegs"],
+                // For Firebase JS SDK v7.20.0 and later, measurementId is optional
+                firebaseConfig: {
+                    apiKey: "__FIREBASE_API_KEY__",
+                    authDomain: "__FIREBASE_AUTH_DOMAIN__",
+                    projectId: "__FIREBASE_PROJECT_ID__",
+                    storageBucket: "__FIREBASE_STORAGE_BUCKET__",
+                    messagingSenderId: "__FIREBASE_MESSAGING_SENDER_ID__",
+                    appId: "__FIREBASE_APP_ID__"
+                }
+            },
+            days: {} // Keyed by YYYY-MM-DD
+        };
+
+        let autoSaveTimer = null;
+
+        // Visual Status Bar Handler
+        function setSaveStatus(state, message) {
+            const bar = document.getElementById('save-status-bar');
+            const icon = document.getElementById('status-icon');
+            const text = document.getElementById('status-text');
+            const ping = document.getElementById('status-ping');
+            const dot = document.getElementById('status-dot');
+
+            if (state === 'unauthenticated') {
+                bar.className = "flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20";
+                icon.className = "fa-solid fa-cloud-slash text-xs";
+                ping.className = "hidden";
+                dot.className = "relative inline-flex rounded-full h-2 w-2 bg-amber-500";
+                text.innerText = message || "Nicht angemeldet (Kein Speichern)";
+            } else if (state === 'saving') {
+                bar.className = "flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold bg-blue-500/10 text-blue-400 border border-blue-500/20";
+                icon.className = "fa-solid fa-arrows-rotate animate-spin text-xs";
+                ping.className = "animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75";
+                dot.className = "relative inline-flex rounded-full h-2 w-2 bg-blue-500";
+                text.innerText = message || "Synchronisiere Cloud...";
+            } else if (state === 'saved') {
+                bar.className = "flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+                icon.className = "fa-solid fa-cloud-check text-xs";
+                ping.className = "animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75";
+                dot.className = "relative inline-flex rounded-full h-2 w-2 bg-emerald-500";
+                text.innerText = message || "Cloud & Lokal synchron";
+            } else if (state === 'error') {
+                bar.className = "flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold bg-rose-500/10 text-rose-400 border border-rose-500/20";
+                icon.className = "fa-solid fa-circle-exclamation text-xs";
+                ping.className = "hidden";
+                dot.className = "relative inline-flex rounded-full h-2 w-2 bg-rose-500";
+                text.innerText = message || "Fehler beim Speichern";
+            }
+        }
+
+        // STRICT STORAGE RULE: Save to localStorage & Cloud ONLY if Cloud-Connected
+        async function triggerAutoSave() {
+            if (!isAuthenticated || !currentUser) {
+                setSaveStatus('unauthenticated');
+                showCloudWarningBanner(true);
+                return;
+            }
+
+            setSaveStatus('saving');
+            if (autoSaveTimer) clearTimeout(autoSaveTimer);
+
+            autoSaveTimer = setTimeout(async () => {
+                try {
+                    // 1. Save to Local Storage ONLY when Cloud-authenticated
+                    localStorage.setItem(`zeiterfassung_state_${currentUser.uid}`, JSON.stringify(appState));
+
+                    // 2. Sync to Firebase Firestore
+                    if (db) {
+                        const userDocRef = window.FirebaseModule.doc(db, "users", currentUser.uid);
+                        await window.FirebaseModule.setDoc(userDocRef, appState, { merge: true });
+                    }
+
+                    setSaveStatus('saved');
+                    showCloudWarningBanner(false);
+                } catch (e) {
+                    console.error("AutoSave Error:", e);
+                    setSaveStatus('error', 'Sync-Fehler');
+                }
+            }, 400);
+        }
+
+        function showCloudWarningBanner(show) {
+            const banner = document.getElementById('cloud-warning-banner');
+            const note = document.getElementById('cloud-sync-note');
+            if (show) {
+                banner.classList.remove('hidden');
+                note.classList.remove('hidden');
+            } else {
+                banner.classList.add('hidden');
+                note.classList.add('hidden');
+            }
+        }
+
+        // Helper calculations
+        function parseTimeToMinutes(timeStr) {
+            if (!timeStr) return null;
+            const parts = timeStr.split(':');
+            if (parts.length !== 2) return null;
+            return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
+        }
+
+        function formatMinutesToHHMM(minutes) {
+            if (minutes === null || isNaN(minutes)) return "00:00";
+            const sign = minutes < 0 ? "-" : "";
+            const absMin = Math.abs(minutes);
+            const h = Math.floor(absMin / 60);
+            const m = absMin % 60;
+            return `${sign}${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+        }
+
+        // Main Render Engine
+        function renderTimesheet() {
+            const year = currentDate.getFullYear();
+            const month = currentDate.getMonth();
+            const monthPicker = document.getElementById('month-picker');
+            monthPicker.value = `${year}-${String(month + 1).padStart(2, '0')}`;
+
+            const tbody = document.getElementById('timesheet-body');
+            tbody.innerHTML = '';
+
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            let totalMonthSoll = 0;
+            let totalMonthIst = 0;
+            let monthVacationDays = 0;
+
+            let weeklySoll = 0;
+            let weeklyIst = 0;
+
+            // Get location dropdown options from settings
+            const locationOptions = appState.settings.locations || ["Homeoffice", "Büro Hauptsitz", "Büro Filiale", "Außendienst / Kunde", "Unterwegs"];
+
+            for (let day = 1; day <= daysInMonth; day++) {
+                const dateObj = new Date(year, month, day);
+                const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                const dayOfWeek = dateObj.getDay(); // 0 = Sun, 6 = Sat
+                const isWeekend = (dayOfWeek === 0 || dayOfWeek === 6);
+
+                // Default record if not present
+                if (!appState.days[dateStr]) {
+                    appState.days[dateStr] = {
+                        type: isWeekend ? 'kein_dienst' : 'arbeit',
+                        sollStart: isWeekend ? '' : appState.settings.defaultStart,
+                        sollEnd: isWeekend ? '' : appState.settings.defaultEnd,
+                        sollPause: isWeekend ? 0 : appState.settings.defaultPause,
+                        istStart: '',
+                        istEnd: '',
+                        istPause: 0,
+                        location: locationOptions[0] || 'Homeoffice',
+                        note: ''
+                    };
+                }
+
+                const dayData = appState.days[dateStr];
+
+                // Calculations
+                let sollMin = 0;
+                let istMin = 0;
+
+                const sStart = parseTimeToMinutes(dayData.sollStart);
+                const sEnd = parseTimeToMinutes(dayData.sollEnd);
+                if (sStart !== null && sEnd !== null && sEnd >= sStart) {
+                    sollMin = Math.max(0, (sEnd - sStart) - (parseInt(dayData.sollPause) || 0));
+                }
+
+                if (dayData.type === 'arbeit') {
+                    const iStart = parseTimeToMinutes(dayData.istStart);
+                    const iEnd = parseTimeToMinutes(dayData.istEnd);
+                    if (iStart !== null && iEnd !== null && iEnd >= iStart) {
+                        istMin = Math.max(0, (iEnd - iStart) - (parseInt(dayData.istPause) || 0));
+                    }
+                } else if (dayData.type === 'urlaub' || dayData.type === 'krankheit' || dayData.type === 'feiertag') {
+                    istMin = sollMin; // Credited fully based on planned time
+                    if (dayData.type === 'urlaub') monthVacationDays++;
+                } else if (dayData.type === 'kein_dienst') {
+                    sollMin = 0;
+                    istMin = 0;
+                }
+
+                const saldoMin = istMin - sollMin;
+
+                totalMonthSoll += sollMin;
+                totalMonthIst += istMin;
+                weeklySoll += sollMin;
+                weeklyIst += istMin;
+
+                const dayName = dateObj.toLocaleDateString('de-DE', { weekday: 'short' });
+                const rowClass = isWeekend ? 'bg-slate-950/40 text-slate-400' : 'hover:bg-slate-800/30';
+
+                // Build Location Dropdown HTML
+                let locationOptionsHTML = `<option value="">-- Wählen --</option>`;
+                locationOptions.forEach(loc => {
+                    const selected = (dayData.location === loc) ? 'selected' : '';
+                    locationOptionsHTML += `<option value="${loc}" ${selected}>${loc}</option>`;
+                });
+
+                const tr = document.createElement('tr');
+                tr.className = `${rowClass} transition-colors`;
+                tr.innerHTML = `
+                    <td class="py-2.5 px-3 font-medium text-xs whitespace-nowrap">
+                        <span class="${isWeekend ? 'text-slate-500' : 'text-slate-200'}">${dayName}, ${String(day).padStart(2, '0')}.${String(month + 1).padStart(2, '0')}</span>
+                    </td>
+                    <td class="py-2.5 px-3">
+                        <select data-date="${dateStr}" data-field="type" class="auto-input bg-slate-800 border border-slate-700 text-xs rounded-lg p-1.5 text-slate-200 focus:ring-1 focus:ring-emerald-500 focus:outline-none cursor-pointer">
+                            <option value="arbeit" ${dayData.type === 'arbeit' ? 'selected' : ''}>Arbeit</option>
+                            <option value="urlaub" ${dayData.type === 'urlaub' ? 'selected' : ''}>Urlaub</option>
+                            <option value="krankheit" ${dayData.type === 'krankheit' ? 'selected' : ''}>Krankheit</option>
+                            <option value="feiertag" ${dayData.type === 'feiertag' ? 'selected' : ''}>Feiertag</option>
+                            <option value="kein_dienst" ${dayData.type === 'kein_dienst' ? 'selected' : ''}>Kein Dienst</option>
+                        </select>
+                    </td>
+                    <td class="py-2.5 px-3">
+                        <div class="flex items-center gap-1">
+                            <input type="time" data-date="${dateStr}" data-field="sollStart" value="${dayData.sollStart}" class="auto-input bg-slate-800/80 border border-slate-700/80 rounded-md p-1 text-xs text-slate-300 w-20">
+                            <span class="text-slate-500">-</span>
+                            <input type="time" data-date="${dateStr}" data-field="sollEnd" value="${dayData.sollEnd}" class="auto-input bg-slate-800/80 border border-slate-700/80 rounded-md p-1 text-xs text-slate-300 w-20">
+                            <input type="number" placeholder="Pause" data-date="${dateStr}" data-field="sollPause" value="${dayData.sollPause}" class="auto-input bg-slate-800/80 border border-slate-700/80 rounded-md p-1 text-xs text-slate-300 w-12 text-center" title="Soll-Pause (Min)">
+                        </div>
+                    </td>
+                    <td class="py-2.5 px-3">
+                        <div class="flex items-center gap-1 ${dayData.type !== 'arbeit' ? 'opacity-40 pointer-events-none' : ''}">
+                            <input type="time" data-date="${dateStr}" data-field="istStart" value="${dayData.istStart}" class="auto-input bg-slate-800 border border-slate-700 rounded-md p-1 text-xs text-slate-100 font-mono w-20">
+                            <span class="text-slate-500">-</span>
+                            <input type="time" data-date="${dateStr}" data-field="istEnd" value="${dayData.istEnd}" class="auto-input bg-slate-800 border border-slate-700 rounded-md p-1 text-xs text-slate-100 font-mono w-20">
+                            <input type="number" placeholder="Pause" data-date="${dateStr}" data-field="istPause" value="${dayData.istPause}" class="auto-input bg-slate-800 border border-slate-700 rounded-md p-1 text-xs text-slate-100 w-12 text-center" title="Ist-Pause (Min)">
+                        </div>
+                    </td>
+                    <td class="py-2.5 px-3 text-right font-mono font-medium text-xs text-slate-200">
+                        ${formatMinutesToHHMM(istMin)}
+                    </td>
+                    <td class="py-2.5 px-3 text-right font-mono font-semibold text-xs ${saldoMin > 0 ? 'text-emerald-400' : saldoMin < 0 ? 'text-rose-400' : 'text-slate-400'}">
+                        ${saldoMin > 0 ? '+' : ''}${formatMinutesToHHMM(saldoMin)}
+                    </td>
+                    <!-- DROPDOWN LOCATION SELECT -->
+                    <td class="py-2.5 px-3">
+                        <select data-date="${dateStr}" data-field="location" class="auto-input bg-slate-800 border border-slate-700 text-xs rounded-lg p-1.5 text-slate-200 focus:ring-1 focus:ring-emerald-500 focus:outline-none w-full max-w-[160px] cursor-pointer">
+                            ${locationOptionsHTML}
+                        </select>
+                    </td>
+                    <td class="py-2.5 px-3">
+                        <input type="text" placeholder="Notiz..." data-date="${dateStr}" data-field="note" value="${dayData.note || ''}" class="auto-input bg-slate-800/80 border border-slate-700/80 rounded-md p-1 text-xs text-slate-300 w-full min-w-[120px]">
+                    </td>
+                `;
+                tbody.appendChild(tr);
+
+                // Add Weekly Summary Row on Sunday or last day of month
+                if (dayOfWeek === 0 || day === daysInMonth) {
+                    const weekSaldo = weeklyIst - weeklySoll;
+                    const weekTr = document.createElement('tr');
+                    weekTr.className = 'bg-slate-950/90 font-semibold border-y border-slate-800 text-xs';
+                    weekTr.innerHTML = `
+                        <td colspan="4" class="py-2 px-3 text-slate-400">
+                            <i class="fa-solid fa-sigma text-emerald-400 mr-1.5"></i> Wochensumme
+                        </td>
+                        <td class="py-2 px-3 text-right font-mono text-slate-200">${formatMinutesToHHMM(weeklyIst)}</td>
+                        <td class="py-2 px-3 text-right font-mono ${weekSaldo >= 0 ? 'text-emerald-400' : 'text-rose-400'}">
+                            ${weekSaldo > 0 ? '+' : ''}${formatMinutesToHHMM(weekSaldo)}
+                        </td>
+                        <td colspan="2"></td>
+                    `;
+                    tbody.appendChild(weekTr);
+                    weeklySoll = 0;
+                    weeklyIst = 0;
+                }
+            }
+
+            // Dashboard KPI Updates
+            const totalSaldo = totalMonthIst - totalMonthSoll;
+            document.getElementById('stat-month-soll').innerText = `${formatMinutesToHHMM(totalMonthSoll)} h`;
+            document.getElementById('stat-month-ist').innerText = `${formatMinutesToHHMM(totalMonthIst)} h`;
+            
+            const saldoEl = document.getElementById('stat-month-saldo');
+            saldoEl.innerText = `${totalSaldo > 0 ? '+' : ''}${formatMinutesToHHMM(totalSaldo)} h`;
+            saldoEl.className = `mt-2 text-2xl font-extrabold font-mono ${totalSaldo >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+            
+            document.getElementById('stat-vacation-days').innerText = `${monthVacationDays} Tage`;
+
+            // Input Handlers with Strict Auto-Save
+            document.querySelectorAll('.auto-input').forEach(input => {
+                input.addEventListener('change', (e) => {
+                    const date = e.target.dataset.date;
+                    const field = e.target.dataset.field;
+                    appState.days[date][field] = e.target.value;
+                    
+                    triggerAutoSave();
+                    if (field === 'type' || field === 'sollStart' || field === 'sollEnd') {
+                        renderTimesheet();
+                    }
+                });
+            });
+        }
+
+        // Initialize Firebase Authentication & Sync
+        async function setupFirebase() {
+            if (!appState.settings.firebaseConfig) return;
+
+            try {
+                const config = typeof appState.settings.firebaseConfig === 'string' 
+                    ? JSON.parse(appState.settings.firebaseConfig) 
+                    : appState.settings.firebaseConfig;
+
+                firebaseApp = window.FirebaseModule.initializeApp(config);
+                auth = window.FirebaseModule.getAuth(firebaseApp);
+                db = window.FirebaseModule.getFirestore(firebaseApp);
+
+                window.FirebaseModule.onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        currentUser = user;
+                        isAuthenticated = true;
+                        document.getElementById('auth-btn-text').innerText = user.displayName || user.email || 'Angemeldet';
+                        showCloudWarningBanner(false);
+
+                        // Load user data from Firestore
+                        const userDocRef = window.FirebaseModule.doc(db, "users", user.uid);
+                        const docSnap = await window.FirebaseModule.getDoc(userDocRef);
+                        
+                        if (docSnap.exists()) {
+                            appState = docSnap.data();
+                            // Load to local storage now that authenticated
+                            localStorage.setItem(`zeiterfassung_state_${user.uid}`, JSON.stringify(appState));
+                        }
+
+                        renderTimesheet();
+                        setSaveStatus('saved', 'Cloud-Verbindung aktiv');
+                    } else {
+                        currentUser = null;
+                        isAuthenticated = false;
+                        document.getElementById('auth-btn-text').innerText = 'Anmelden';
+                        showCloudWarningBanner(true);
+                        setSaveStatus('unauthenticated');
+                    }
+                });
+            } catch (err) {
+                console.error("Firebase init failed:", err);
+                setSaveStatus('error', 'Firebase Konfigurationsfehler');
+            }
+        }
+
+        // Login Handler
+        async function handleGoogleLogin() {
+            if (!auth) {
+                document.getElementById('settings-modal').classList.remove('hidden');
+                alert("Bitte trage zuerst deine Firebase-Konfiguration in den Einstellungen ein!");
+                return;
+            }
+
+            try {
+                const provider = new window.FirebaseModule.GoogleAuthProvider();
+                await window.FirebaseModule.signInWithPopup(auth, provider);
+            } catch (err) {
+                console.error("Login failed:", err);
+                alert("Anmeldung fehlgeschlagen: " + err.message);
+            }
+        }
+
+        // App Initialization
+        function initApp() {
+            document.getElementById('month-picker').addEventListener('change', (e) => {
+                if (e.target.value) {
+                    const [y, m] = e.target.value.split('-');
+                    currentDate = new Date(parseInt(y), parseInt(m) - 1, 1);
+                    renderTimesheet();
+                }
+            });
+
+            document.getElementById('prev-month').addEventListener('click', () => {
+                currentDate.setMonth(currentDate.getMonth() - 1);
+                renderTimesheet();
+            });
+
+            document.getElementById('next-month').addEventListener('click', () => {
+                currentDate.setMonth(currentDate.getMonth() + 1);
+                renderTimesheet();
+            });
+
+            // Auth Button Triggers
+            document.getElementById('btn-auth').addEventListener('click', handleGoogleLogin);
+            document.getElementById('btn-banner-login').addEventListener('click', handleGoogleLogin);
+
+            // Settings Modal
+            const settingsModal = document.getElementById('settings-modal');
+            document.getElementById('btn-settings').addEventListener('click', () => settingsModal.classList.remove('hidden'));
+            document.getElementById('close-settings').addEventListener('click', () => settingsModal.classList.add('hidden'));
+
+            // Live Location & Settings Updates
+            document.getElementById('cfg-locations').addEventListener('change', (e) => {
+                const locArray = e.target.value.split(',').map(s => s.trim()).filter(s => s.length > 0);
+                appState.settings.locations = locArray;
+                triggerAutoSave();
+                renderTimesheet();
+            });
+
+            ['cfg-default-start', 'cfg-default-end', 'cfg-default-pause', 'cfg-firebase-json'].forEach(id => {
+                document.getElementById(id).addEventListener('change', () => {
+                    appState.settings.defaultStart = document.getElementById('cfg-default-start').value;
+                    appState.settings.defaultEnd = document.getElementById('cfg-default-end').value;
+                    appState.settings.defaultPause = document.getElementById('cfg-default-pause').value;
+                    appState.settings.firebaseConfig = document.getElementById('cfg-firebase-json').value;
+                    
+                    if (id === 'cfg-firebase-json') setupFirebase();
+                    triggerAutoSave();
+                });
+            });
+
+            renderTimesheet();
+            setupFirebase();
+            showCloudWarningBanner(!isAuthenticated);
+        }
+
+        window.onload = initApp;
+    </script>
 </body>
 </html>

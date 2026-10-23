@@ -1,0 +1,43 @@
+name: Inject Secrets & Deploy
+
+on:
+  push:
+    branches: ["main"] # Falls dein Hauptbranch 'master' heißt, hier anpassen
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Code auschecken
+        uses: actions/checkout@v4
+
+      # SCHRITT: Secrets vor dem Deployment in die index.html einsetzen
+      - name: Secrets injizieren
+        run: |
+          sed -i 's|__FIREBASE_API_KEY__|${{ secrets.FIREBASE_API_KEY }}|g' index.html
+          sed -i 's|__FIREBASE_AUTH_DOMAIN__|${{ secrets.FIREBASE_AUTH_DOMAIN }}|g' index.html
+          sed -i 's|__FIREBASE_PROJECT_ID__|${{ secrets.FIREBASE_PROJECT_ID }}|g' index.html
+          sed -i 's|__FIREBASE_STORAGE_BUCKET__|${{ secrets.FIREBASE_STORAGE_BUCKET }}|g' index.html
+          sed -i 's|__FIREBASE_MESSAGING_SENDER_ID__|${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}|g' index.html
+          sed -i 's|__FIREBASE_APP_ID__|${{ secrets.FIREBASE_APP_ID }}|g' index.html
+
+      # SCHRITT: Standard-Ordner für GitHub Pages vorbereiten & hochladen
+      - name: Pages einrichten
+        uses: actions/configure-pages@v4
+
+      - name: Ordner hochladen
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+
+      - name: Auf GitHub Pages deployen
+        id: deployment
+        uses: actions/deploy-pages@v4

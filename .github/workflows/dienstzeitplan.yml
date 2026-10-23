@@ -2,12 +2,17 @@ name: Inject Secrets & Deploy
 
 on:
   push:
-    branches: ["main"] # Falls dein Hauptbranch 'master' heißt, hier anpassen
+    branches: ["main"]
+  workflow_dispatch:
 
 permissions:
   contents: read
   pages: write
   id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
 
 jobs:
   deploy:
@@ -15,28 +20,66 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
+
     steps:
       - name: Code auschecken
         uses: actions/checkout@v4
 
-      # SCHRITT: Secrets vor dem Deployment in die index.html einsetzen
-      - name: Secrets injizieren
+      - name: Firebase-Konfiguration einsetzen
+        env:
+          FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+          FIREBASE_AUTH_DOMAIN: ${{ secrets.FIREBASE_AUTH_DOMAIN }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_STORAGE_BUCKET: ${{ secrets.FIREBASE_STORAGE_BUCKET }}
+          FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}
+          FIREBASE_APP_ID: ${{ secrets.FIREBASE_APP_ID }}
         run: |
-          sed -i 's|__FIREBASE_API_KEY__|${{ secrets.FIREBASE_API_KEY }}|g' index.html
-          sed -i 's|__FIREBASE_AUTH_DOMAIN__|${{ secrets.FIREBASE_AUTH_DOMAIN }}|g' index.html
-          sed -i 's|__FIREBASE_PROJECT_ID__|${{ secrets.FIREBASE_PROJECT_ID }}|g' index.html
-          sed -i 's|__FIREBASE_STORAGE_BUCKET__|${{ secrets.FIREBASE_STORAGE_BUCKET }}|g' index.html
-          sed -i 's|__FIREBASE_MESSAGING_SENDER_ID__|${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}|g' index.html
-          sed -i 's|__FIREBASE_APP_ID__|${{ secrets.FIREBASE_APP_ID }}|g' index.html
+          python3 <<'PY'
+          import os
+          from pathlib import Path
 
-      # SCHRITT: Standard-Ordner für GitHub Pages vorbereiten & hochladen
+          path = Path("index.html")
+          if not path.is_file():
+              raise SystemExit("FEHLER: index.html nicht gefunden")
+
+          content = path.read_text(encoding="utf-8")
+
+          values = {
+              "__FIREBASE_API_KEY__": os.environ["FIREBASE_API_KEY"],
+              "__FIREBASE_AUTH_DOMAIN__": os.environ["FIREBASE_AUTH_DOMAIN"],
+              "__FIREBASE_PROJECT_ID__": os.environ["FIREBASE_PROJECT_ID"],
+              "__FIREBASE_STORAGE_BUCKET__": os.environ["FIREBASE_STORAGE_BUCKET"],
+              "__FIREBASE_MESSAGING_SENDER_ID__": os.environ["FIREBASE_MESSAGING_SENDER_ID"],
+              "__FIREBASE_APP_ID__": os.environ["FIREBASE_APP_ID"],
+          }
+
+          missing = [key for key, value in values.items() if not value]
+          if missing:
+              raise SystemExit(
+                  "FEHLER: Leere GitHub Secrets: " + ", ".join(missing)
+              )
+
+          for placeholder, value in values.items():
+              content = content.replace(placeholder, value)
+
+          unresolved = [key for key in values if key in content]
+          if unresolved:
+              raise SystemExit(
+                  "FEHLER: Platzhalter nicht ersetzt: " + ", ".join(unresolved)
+              )
+
+          path.write_text(content, encoding="utf-8")
+          print("Firebase-Konfiguration erfolgreich eingesetzt.")
+
+          PY
+
       - name: Pages einrichten
-        uses: actions/configure-pages@v4
+        uses: actions/configure-pages@v5
 
       - name: Ordner hochladen
         uses: actions/upload-pages-artifact@v3
         with:
-          path: '.'
+          path: "."
 
       - name: Auf GitHub Pages deployen
         id: deployment

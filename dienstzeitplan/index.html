@@ -22,10 +22,7 @@
         import { getAuth, GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
         import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
-        // ==========================================
-        // HIER DEINE FIREBASE KONFIGURATION Eintragen:
-        // ==========================================
-        // --- FIREBASE KONFIGURATION (wird über GitHub Actions durch Secrets ersetzt) ---
+        // Firebase Konfiguration (wird automatisch durch GitHub Actions Secrets ersetzt)
         const firebaseConfig = {
             apiKey: "__FIREBASE_API_KEY__",
             authDomain: "__FIREBASE_AUTH_DOMAIN__",
@@ -40,7 +37,7 @@
         let isFirebaseInitialized = false;
 
         try {
-            if (firebaseConfig.apiKey && firebaseConfig.apiKey !== "HIER_API_KEY_EINTRAGEN") {
+            if (firebaseConfig.apiKey && !firebaseConfig.apiKey.startsWith("__")) {
                 app = initializeApp(firebaseConfig);
                 auth = getAuth(app);
                 db = getFirestore(app);
@@ -54,7 +51,7 @@
         let currentDate = new Date();
         let timeData = {}; // Format: "YYYY-MM-DD" -> Data
         let settings = {
-            weeklyTargetMinutes: 2400, // z.B. 40 Stunden in Minuten
+            weeklyTargetMinutes: 2400, // 40 Stunden in Minuten
             workDays: [1, 2, 3, 4, 5, 6], // Mo-Sa Standard
             locations: ["Homeoffice", "Büro Hauptsitz", "Filiale", "Kunden vor Ort", "Unterwegs"],
             absenceDefaults: {
@@ -63,8 +60,7 @@
                 "Feiertag": 480,
                 "Kein Dienst": 0,
                 "Sonstige": 0
-            },
-            holidays: {} // "YYYY-MM-DD": "Name"
+            }
         };
 
         // DOM Elements
@@ -82,7 +78,6 @@
         const kpiMonthCredited = document.getElementById('kpi-month-credited');
         const kpiMonthBalance = document.getElementById('kpi-month-balance');
 
-        // Initialisierung
         window.addEventListener('DOMContentLoaded', () => {
             setupAuth();
             setupNavigation();
@@ -94,9 +89,12 @@
             if (!isFirebaseInitialized) {
                 authBanner.classList.remove('hidden');
                 authBanner.innerHTML = `<div class="bg-amber-100 border-l-4 border-amber-500 text-amber-700 p-4 mb-4" role="alert">
-                    <p class="font-bold">Firebase Konfiguration fehlt</p>
-                    <p>Bitte trage deine Firebase Zugangsdaten oben im Script-Bereich der <code>index.html</code> ein, um die Cloud-Synchronisierung zu aktivieren.</p>
+                    <p class="font-bold">Konfiguration wird geladen</p>
+                    <p>Warte auf GitHub Actions Secret Injection oder trage die Daten lokal ein.</p>
                 </div>`;
+                // Trotz fehlender Cloud im lokalen Modus lauffähig machen für Tests:
+                mainContent.classList.remove('opacity-50', 'pointer-events-none');
+                renderApp();
                 return;
             }
 
@@ -135,7 +133,6 @@
             });
         }
 
-        // Cloud Firestore Sync (Speicherung NUR wenn Cloud Verbindung aktiv)
         async function saveDataToCloud() {
             if (!currentUser || !db) return;
             try {
@@ -145,9 +142,10 @@
                     settings: settings,
                     updatedAt: new Date().toISOString()
                 });
+                showSyncStatus("Gespeichert", "bg-green-500");
             } catch (e) {
-                console.error("Fehler beim automatischen Speichern:", e);
-                showSyncStatus("Fehler beim Speichern in der Cloud", "bg-red-500");
+                console.error("Speicherfehler:", e);
+                showSyncStatus("Fehler beim Speichern", "bg-red-500");
             }
         }
 
@@ -166,7 +164,7 @@
                 renderApp();
                 showSyncStatus("Verbunden & Synchronisiert", "bg-green-500");
             } catch (e) {
-                console.error("Fehler beim Laden:", e);
+                console.error("Ladefehler:", e);
                 showSyncStatus("Ladefehler", "bg-red-500");
             }
         }
@@ -177,7 +175,6 @@
             document.getElementById('sync-status-text').textContent = msg;
         }
 
-        // Navigation
         function setupNavigation() {
             document.getElementById('prev-month').addEventListener('click', () => {
                 currentDate.setMonth(currentDate.getMonth() - 1);
@@ -187,13 +184,12 @@
                 currentDate.setMonth(currentDate.getMonth() + 1);
                 renderApp();
             });
-
             document.getElementById('settings-btn').addEventListener('click', () => {
                 openSettingsModal();
             });
         }
 
-        // Haupt-Render-Logik
+        // Haupt-Render-Logik: Zeigt IMMER alle Tage des Monats an
         function renderApp() {
             const year = currentDate.getFullYear();
             const month = currentDate.getMonth();
@@ -207,23 +203,17 @@
             let monthActualMin = 0;
             let monthCreditedMin = 0;
 
-            // Wöchentliche Soll-Berechnung pro Arbeitstag
             const activeWorkDaysCount = settings.workDays.length;
             const dailyTargetMin = activeWorkDaysCount > 0 ? Math.round(settings.weeklyTargetMinutes / activeWorkDaysCount) : 480;
 
-            // Wochenaggregation für rechte Anzeige
-            let currentWeekNumber = -1;
-            let weekTarget = 0, weekActual = 0, weekCredited = 0;
-            let weekRowsBuffer = [];
-
+            // Schleife über JEDEN Tag des Monats (1 bis Monatsende)
             for (let day = 1; day <= daysInMonth; day++) {
                 const dateObj = new Date(year, month, day);
-                const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day, '0')}`.replace(/-(\d)$/, '-0$1'); // Format YYYY-MM-DD
-                const isoDate = dateObj.toISOString().split('T')[0];
+                const isoDate = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
                 const dayOfWeek = dateObj.getDay(); // 0 = So, 6 = Sa
                 const isWorkDay = settings.workDays.includes(dayOfWeek);
 
-                // Daten für den Tag laden oder initialisieren
+                // Wenn für diesen Tag noch kein Eintrag existiert, automatisch initialisieren
                 if (!timeData[isoDate]) {
                     timeData[isoDate] = {
                         type: isWorkDay ? "Arbeit" : "Kein Dienst",
@@ -236,7 +226,6 @@
                 }
                 const d = timeData[isoDate];
 
-                // Berechnungen in Minuten
                 const targetMin = (d.type === "Arbeit" && isWorkDay) ? dailyTargetMin : 0;
                 monthTargetMin += targetMin;
 
@@ -259,13 +248,10 @@
 
                 const dayBalance = creditedMin - targetMin;
 
-                // UI Zeile rendern
                 const row = document.createElement('tr');
                 row.className = `border-b hover:bg-gray-50 ${dayOfWeek === 0 || dayOfWeek === 6 ? 'bg-gray-50 text-gray-500' : ''}`;
                 
                 const formattedDate = dateObj.toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' });
-
-                // Location Dropdown Optionen
                 let locOptions = settings.locations.map(loc => `<option value="${loc}" ${d.location === loc ? 'selected' : ''}>${loc}</option>`).join('');
 
                 row.innerHTML = `
@@ -295,7 +281,6 @@
                 daysContainer.appendChild(row);
             }
 
-            // KPIs aktualisieren
             const monthBalanceMin = monthCreditedMin - monthTargetMin;
             kpiMonthTarget.textContent = formatMinutes(monthTargetMin);
             kpiMonthActual.textContent = formatMinutes(monthActualMin);
@@ -303,7 +288,6 @@
             kpiMonthBalance.textContent = formatMinutes(monthBalanceMin);
             kpiMonthBalance.className = `text-xl font-bold font-mono ${monthBalanceMin >= 0 ? 'text-green-600' : 'text-red-600'}`;
 
-            // Event Listener für automatische Speicherung bei Eingaben
             document.querySelectorAll('.day-input').forEach(input => {
                 input.addEventListener('change', (e) => {
                     const date = e.target.dataset.date;
@@ -312,7 +296,7 @@
                     if (timeData[date]) {
                         timeData[date][field] = val;
                         saveDataToCloud();
-                        renderApp(); // Direktes Re-Rendering für Live-Aktualisierung
+                        renderApp();
                     }
                 });
             });
@@ -326,17 +310,12 @@
             return `${sign}${hours}:${String(minutes).padStart(2, '0')}`;
         }
 
-        // Settings Modal Logik
         const settingsModal = document.getElementById('settings-modal');
         function openSettingsModal() {
             document.getElementById('setting-weekly-target').value = (settings.weeklyTargetMinutes / 60).toFixed(1);
-            
-            // Checkboxen für Wochentage
             [1, 2, 3, 4, 5, 6, 0].forEach(day => {
                 document.getElementById(`day-${day}`).checked = settings.workDays.includes(day);
             });
-
-            // Standorte als Liste anzeigen
             document.getElementById('setting-locations').value = settings.locations.join(', ');
             settingsModal.classList.remove('hidden');
         }
@@ -349,9 +328,7 @@
             e.preventDefault();
             const weeklyHours = parseFloat(document.getElementById('setting-weekly-target').value) || 40;
             settings.weeklyTargetMinutes = Math.round(weeklyHours * 60);
-
             settings.workDays = [1, 2, 3, 4, 5, 6, 0].filter(day => document.getElementById(`day-${day}`).checked);
-            
             const locStr = document.getElementById('setting-locations').value;
             settings.locations = locStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
 
@@ -361,7 +338,6 @@
         });
 
         function setupModalListeners() {
-            // CSV Export
             document.getElementById('export-btn').addEventListener('click', () => {
                 let csv = 'Datum;Typ;Start;Ende;Pause(min);Standort;Notiz\n';
                 for (const [date, d] of Object.entries(timeData)) {
@@ -400,17 +376,17 @@
     <div id="auth-banner" class="container mx-auto px-4 mt-4">
         <div class="bg-amber-100 border-l-4 border-amber-500 text-amber-700 p-4 rounded shadow" role="alert">
             <p class="font-bold">Anmeldung erforderlich</p>
-            <p>Bitte melde dich oben mit deinem Google-Konto an, um deine Arbeitszeiten zu speichern und geräteübergreifend zu synchronisieren.</p>
+            <p>Bitte melde dich oben mit deinem Google-Konto an, um deine Arbeitszeiten sicher in der Cloud zu speichern.</p>
         </div>
     </div>
 
     <!-- Main App Container -->
     <main id="main-content" class="container mx-auto px-4 py-6 flex-grow opacity-50 pointer-events-none transition-opacity duration-300">
         
-        <!-- Monat Navigation & KPIs Grid (Wochensumme rechts platziert) -->
+        <!-- Monat Navigation & KPIs Grid (Wochensumme/Infos rechts platziert) -->
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
             
-            <!-- Monat & Übersicht -->
+            <!-- Monat & KPI Übersicht -->
             <div class="lg:col-span-2 bg-white rounded-lg shadow p-4 flex flex-col justify-between">
                 <div class="flex justify-between items-center mb-4">
                     <button id="prev-month" class="bg-gray-200 hover:bg-gray-300 px-3 py-1.5 rounded font-bold"><i class="fa-solid fa-chevron-left"></i></button>
@@ -438,11 +414,11 @@
                 </div>
             </div>
 
-            <!-- Wochensumme / Rechte Spalte -->
+            <!-- Rechte Spalte (Aktionen & Info) -->
             <div class="bg-white rounded-lg shadow p-4 flex flex-col justify-between border-l-4 border-blue-500">
                 <div>
-                    <h3 class="text-sm font-bold text-gray-500 uppercase tracking-wider mb-2">Wochen- & Info-Bereich</h3>
-                    <p class="text-sm text-gray-600">Jede Eingabe wird vollautomatisch und direkt in der Cloud gespeichert.</p>
+                    <h3 class="text-sm font-bold text-gray-500 uppercase tracking-wider mb-2">Cloud & Aktionen</h3>
+                    <p class="text-sm text-gray-600">Eingaben werden bei aktiver Cloud-Verbindung vollautomatisch gespeichert.</p>
                 </div>
                 <div class="mt-4 flex gap-2">
                     <button id="export-btn" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-2 rounded text-sm font-bold flex items-center justify-center gap-2">
@@ -453,7 +429,7 @@
 
         </div>
 
-        <!-- Tageserfassung Tabelle -->
+        <!-- Tageserfassung Tabelle (Zeigt immer alle Tage des Monats) -->
         <div class="bg-white rounded-lg shadow overflow-x-auto">
             <table class="w-full text-left border-collapse min-w-[800px]">
                 <thead>
@@ -470,7 +446,7 @@
                     </tr>
                 </thead>
                 <tbody id="days-container">
-                    <!-- Wird per JS befüllt -->
+                    <!-- Wird dynamisch für alle Tage des Monats befüllt -->
                 </tbody>
             </table>
         </div>
